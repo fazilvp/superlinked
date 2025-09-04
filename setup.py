@@ -71,5 +71,10 @@ setup(
         "opentelemetry-api",
         "opentelemetry-sdk",
     ],
+    extras_require={
+        "triton": [
+            "tritonclient[grpc]>=2.40.0",
+        ],
+    },
     zip_safe=False,
 )

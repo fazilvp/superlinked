@@ -43,6 +43,9 @@ from superlinked.framework.common.space.embedding.model_based.engine.embedding_e
 from superlinked.framework.common.space.embedding.model_based.engine.modal_engine_config import (
     ModalEngineConfig,
 )
+from superlinked.framework.common.space.embedding.model_based.engine.triton_engine_config import (
+    TritonEngineConfig,
+)
 from superlinked.framework.common.space.embedding.model_based.singleton_embedding_engine_manager import (
     SingletonEmbeddingEngineManager,
 )
@@ -115,6 +118,13 @@ class TextSimilaritySpace(Space[Vector, str], HasSpaceFieldSet):
                 (
                     f"When using {TextModelHandler.MODAL} as model_handler, embedding_engine_config must "
                     f"be an instance of ModalEngineConfig, but got {type(embedding_engine_config).__name__}"
+                )
+            )
+        if model_handler == TextModelHandler.TRITON and not isinstance(embedding_engine_config, TritonEngineConfig):
+            raise ValueError(
+                (
+                    f"When using {TextModelHandler.TRITON} as model_handler, embedding_engine_config must "
+                    f"be an instance of TritonEngineConfig, but got {type(embedding_engine_config).__name__}"
                 )
             )
 

@@ -42,6 +42,9 @@ from superlinked.framework.common.space.embedding.model_based.engine.open_clip_e
 from superlinked.framework.common.space.embedding.model_based.engine.sentence_transformers_engine import (
     SentenceTransformersEngine,
 )
+from superlinked.framework.common.space.embedding.model_based.engine.triton_engine import (
+    TritonEngine,
+)
 from superlinked.framework.common.space.embedding.model_based.model_dimension_cache import (
     MODEL_DIMENSION_BY_NAME,
 )
@@ -56,6 +59,7 @@ ENGINE_BY_HANDLER: Mapping[ModelHandlerType, type[EmbeddingEngine]] = {
     TextModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
     TextModelHandler.HUGGING_FACE: HuggingFaceEngine,
     TextModelHandler.MODAL: ModalEngine,
+    TextModelHandler.TRITON: TritonEngine,
     ModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
     ModelHandler.HUGGING_FACE: HuggingFaceEngine,
     ModelHandler.OPEN_CLIP: OpenCLIPEngine,
