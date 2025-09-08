@@ -33,6 +33,7 @@ class TritonEngineConfig(EmbeddingEngineConfig):
         model_version (str): The model version (defaults to "1").
         timeout_seconds (float): Request timeout in seconds (defaults to 60.0).
         max_retries (int): Maximum number of retries (defaults to 3).
+        batch_size (int): Maximum batch size for processing inputs (defaults to 32).
         precision (Precision, optional): The desired precision for embeddings. 
                                         Defaults to Precision.FLOAT16.
     """
@@ -42,6 +43,7 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     model_version: str | None = None
     timeout_seconds: float | None = None
     max_retries: int | None = None
+    batch_size: int | None = None
     
     def __post_init__(self) -> None:
         # Validate configuration values
@@ -49,36 +51,43 @@ class TritonEngineConfig(EmbeddingEngineConfig):
             raise ValueError("grpc_url cannot be empty")
         if not self.model_name:
             raise ValueError("model_name cannot be empty")
-        if self.timeout_seconds <= 0:
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
-        if self.max_retries < 0:
+        if self.max_retries is not None and self.max_retries < 0:
             raise ValueError("max_retries cannot be negative")
+        if self.batch_size is not None and self.batch_size <= 0:
+            raise ValueError("batch_size must be positive")
 
     @property
     def triton_grpc_url(self) -> str:
         """Get the gRPC URL."""
-        return self.grpc_url
+        return self.grpc_url or "localhost:8001"
 
     @property
     def triton_model_name(self) -> str:
         """Get the model name."""
-        return self.model_name
+        return self.model_name or "default_model"
 
     @property
     def triton_model_version(self) -> str:
         """Get the model version."""
-        return self.model_version
+        return self.model_version or "1"
 
     @property
     def triton_timeout_seconds(self) -> float:
         """Get the timeout in seconds."""
-        return self.timeout_seconds
+        return self.timeout_seconds or 60.0
 
     @property
     def triton_max_retries(self) -> int:
         """Get the maximum number of retries."""
-        return self.max_retries
+        return self.max_retries or 3
+
+    @property
+    def triton_batch_size(self) -> int:
+        """Get the batch size."""
+        return self.batch_size or 32
 
     @override
     def __str__(self) -> str:
-        return f"{self.precision.name}_{self.grpc_url}_{self.model_name}_{self.model_version}"
+        return f"{self.precision.name}_{self.grpc_url}_{self.model_name}_{self.model_version}_{self.batch_size}"

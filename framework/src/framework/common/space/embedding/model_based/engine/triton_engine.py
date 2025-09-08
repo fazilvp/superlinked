@@ -106,7 +106,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
     @override
     async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
         """
-        Generate embeddings using Triton Inference Server.
+        Generate embeddings using Triton Inference Server with batch processing.
         
         Args:
             inputs: Sequence of text inputs to embed
@@ -121,11 +121,24 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         # Convert inputs to list of strings
         text_inputs = [str(input_text) for input_text in inputs]
         
-        # Run inference in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(None, self._sync_embed, text_inputs)
+        # Split inputs into batches
+        batches = [
+            text_inputs[i : i + self._config.triton_batch_size] 
+            for i in range(0, len(text_inputs), self._config.triton_batch_size)
+        ]
         
-        return embeddings.tolist()
+        # Process batches concurrently
+        loop = asyncio.get_event_loop()
+        batch_results = await asyncio.gather(
+            *[loop.run_in_executor(None, self._sync_embed, batch) for batch in batches]
+        )
+        
+        # Flatten results from all batches
+        all_embeddings = []
+        for batch_embeddings in batch_results:
+            all_embeddings.extend(batch_embeddings.tolist())
+        
+        return all_embeddings
 
     def _sync_embed(self, text_inputs: list[str]) -> np.ndarray:
         """
@@ -141,11 +154,14 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             # Prepare input data
             input_data = np.array(text_inputs, dtype=object)
             
-            # Create input object
+            # Create input object with correct batch dimension
+            # For batched models with dims [-1], reshape to [batch_size, 1] for string inputs
+            batch_size = len(text_inputs)
+            input_data_reshaped = input_data.reshape(batch_size, 1)
             inputs = [
-                grpcclient.InferInput("text", input_data.shape, "BYTES")
+                grpcclient.InferInput("text", [batch_size, 1], "BYTES")
             ]
-            inputs[0].set_data_from_numpy(input_data)
+            inputs[0].set_data_from_numpy(input_data_reshaped)
             
             # Create output object
             outputs = [
