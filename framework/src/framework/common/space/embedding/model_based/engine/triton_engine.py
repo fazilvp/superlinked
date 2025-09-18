@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import time
 from pathlib import Path
 
 import numpy as np
@@ -117,7 +118,10 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         """
         if not inputs:
             return []
-            
+        
+        # Start total operation timing
+        operation_start_time = time.perf_counter()
+        
         # Convert inputs to list of strings
         text_inputs = [str(input_text) for input_text in inputs]
         
@@ -137,6 +141,12 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         all_embeddings = []
         for batch_embeddings in batch_results:
             all_embeddings.extend(batch_embeddings.tolist())
+        
+        # Calculate operation timing
+        operation_end_time = time.perf_counter()
+        total_operation_time = operation_end_time - operation_start_time
+        
+        logger.info(f"Triton inference: {total_operation_time * 1000:.2f}ms")
         
         return all_embeddings
 
@@ -181,14 +191,6 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
                     
                     # Extract embeddings from response
                     embeddings = response.as_numpy("embeddings")
-                    
-                    logger.debug(
-                        "Triton inference successful",
-                        input_count=len(text_inputs),
-                        embedding_shape=embeddings.shape,
-                        attempt=attempt + 1
-                    )
-                    
                     return embeddings
                     
                 except InferenceServerException as e:
@@ -208,7 +210,6 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
                         max_retries=self._config.triton_max_retries
                     )
                     # Short delay before retry
-                    import time
                     time.sleep(0.1 * (attempt + 1))
                     
         except Exception as e:
