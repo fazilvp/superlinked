@@ -21,8 +21,8 @@ import structlog
 from beartype.typing import Sequence
 from typing_extensions import override
 
-from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInput,
+from superlinked.framework.common.space.embedding.model_manager import (
+    ModelEmbeddingInputT,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine import (
     EmbeddingEngine,
@@ -105,7 +105,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             raise
 
     @override
-    async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
+    async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
         """
         Generate embeddings using Triton Inference Server with batch processing.
         
@@ -149,6 +149,16 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         logger.info(f"Triton inference: {total_operation_time * 1000:.2f}ms")
         
         return all_embeddings
+
+    @override
+    def is_query_prompt_supported(self) -> bool:
+        """
+        Triton engines typically don't support query-specific prompts unless specifically configured.
+        
+        Returns:
+            False - indicating no query prompt support by default
+        """
+        return False
 
     def _sync_embed(self, text_inputs: list[str]) -> np.ndarray:
         """
@@ -219,6 +229,20 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
                 input_count=len(text_inputs)
             )
             raise
+
+    @classmethod
+    @override
+    def _get_clean_model_name(cls, model_name: str) -> str:
+        """
+        Return the clean model name for Triton models.
+        
+        Args:
+            model_name: The original model name
+            
+        Returns:
+            The model name as-is since Triton model names don't need preprocessing
+        """
+        return model_name
 
     def __del__(self) -> None:
         """Clean up the client connection."""
