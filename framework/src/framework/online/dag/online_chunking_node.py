@@ -14,19 +14,21 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from beartype.typing import Sequence
 from typing_extensions import override
 
 from superlinked.framework.common.dag.chunking_node import ChunkingNode
 from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.dag.node import Node
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.parser.parsed_schema import ParsedSchema
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
 from superlinked.framework.common.util.chunking_util import Chunker
 from superlinked.framework.online.dag.evaluation_result import EvaluationResult
-from superlinked.framework.online.dag.exception import ChunkException
 from superlinked.framework.online.dag.online_node import OnlineNode
 from superlinked.framework.online.dag.parent_validator import ParentValidationType
+from superlinked.framework.online.online_entity_cache import OnlineEntityCache
 
 
 class OnlineChunkingNode(OnlineNode[ChunkingNode, str]):
@@ -34,14 +36,8 @@ class OnlineChunkingNode(OnlineNode[ChunkingNode, str]):
         self,
         node: ChunkingNode,
         parents: list[OnlineNode[Node[str], str]],
-        storage_manager: StorageManager,
     ) -> None:
-        super().__init__(
-            node,
-            parents,
-            storage_manager,
-            ParentValidationType.EXACTLY_ONE_PARENT,
-        )
+        super().__init__(node, parents, ParentValidationType.EXACTLY_ONE_PARENT)
 
     def __chunk(
         self,
@@ -55,24 +51,28 @@ class OnlineChunkingNode(OnlineNode[ChunkingNode, str]):
         return chunker.chunk_text(text, chunk_size, chunk_overlap, split_chars_keep, split_chars_remove)
 
     @override
-    def evaluate_self(
+    async def evaluate_self(
         self,
         parsed_schemas: Sequence[ParsedSchema],
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[EvaluationResult[str] | None]:
-        return [self.evaluate_self_single(schema, context) for schema in parsed_schemas]
+        return await asyncio.gather(
+            *[self.evaluate_self_single(schema, context, online_entity_cache) for schema in parsed_schemas]
+        )
 
-    def evaluate_self_single(
+    async def evaluate_self_single(
         self,
         parsed_schema: ParsedSchema,
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> EvaluationResult[str] | None:
-        parent_result = self.evaluate_parent(self.parents[0], [parsed_schema], context)[0]
+        parent_result = (await self.evaluate_parent(self.parents[0], [parsed_schema], context, online_entity_cache))[0]
         if parent_result is None:
             return None
         if len(parent_result.chunks) > 0:
             # We can just log a warning and proceed with input_.main.
-            raise ChunkException(f"{self.class_name} cannot have a chunked input.")
+            raise InvalidStateException(f"{self.class_name} cannot have a chunked input.")
         input_value = parent_result.main.value
         chunk_inputs = self.__chunk(
             input_value,
@@ -81,6 +81,4 @@ class OnlineChunkingNode(OnlineNode[ChunkingNode, str]):
             self.node.split_chars_keep,
             self.node.split_chars_remove,
         )
-        main = self._get_single_evaluation_result(input_value)
-        chunks = [self._get_single_evaluation_result(chunk_input) for chunk_input in chunk_inputs]
-        return EvaluationResult(main, chunks)
+        return self._wrap_in_evaluation_result(input_value, chunk_inputs)

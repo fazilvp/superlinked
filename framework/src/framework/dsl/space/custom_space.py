@@ -20,7 +20,8 @@ from superlinked.framework.common.dag.custom_node import CustomVectorEmbeddingNo
 from superlinked.framework.common.dag.embedding_node import EmbeddingNode
 from superlinked.framework.common.dag.schema_field_node import SchemaFieldNode
 from superlinked.framework.common.data_types import Vector
-from superlinked.framework.common.schema.schema_object import FloatList, SchemaObject
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
+from superlinked.framework.common.schema.schema_object import FloatList
 from superlinked.framework.common.space.config.aggregation.aggregation_config import (
     VectorAggregationConfig,
 )
@@ -54,6 +55,7 @@ class CustomSpace(Space[Vector, Vector], HasSpaceFieldSet):
         vector: FloatList | None | Sequence[FloatList | None],
         length: int,
         description: str | None = None,
+        salt: str | None = None,
     ) -> None:
         """
         Initializes a CustomSpace for vector storage and manipulation within Superlinked.
@@ -66,12 +68,15 @@ class CustomSpace(Space[Vector, Vector], HasSpaceFieldSet):
               This can be a single FloatList SchemaField or a list of those.
             length (int): The fixed length that all vectors in this space must have. This ensures uniformity and
               consistency in vector operations.
+            description: (str | None, optional): The description provided with NLQ to provide more accurate results.
+            salt: (str | None, optional): Enables the creation of identical spaces to allow
+                different weighted event definitions with them.
         """
         non_none_vector = self._fields_to_non_none_sequence(vector)
-        super().__init__(non_none_vector, FloatList)
+        super().__init__(non_none_vector, FloatList, salt)
         self.vector = SpaceFieldSet[list[float]](self, set(non_none_vector), allowed_param_types=[list[float]])
         self._transformation_config = self._init_transformation_config(length)
-        self._schema_node_map = self._calculate_schema_node_map(self._transformation_config)
+        self._schema_node_map = self._calculate_schema_node_map(self._transformation_config, salt)
         self._description = description
         self._length = length
 
@@ -89,7 +94,7 @@ class CustomSpace(Space[Vector, Vector], HasSpaceFieldSet):
     @override
     def _embedding_node_by_schema(
         self,
-    ) -> dict[SchemaObject, EmbeddingNode[Vector, Vector]]:
+    ) -> dict[IdSchemaObject, EmbeddingNode[Vector, Vector]]:
         return self._schema_node_map
 
     @property
@@ -112,21 +117,22 @@ class CustomSpace(Space[Vector, Vector], HasSpaceFieldSet):
         return TransformationConfig(normalization_config, aggregation_config, embedding_config)
 
     @override
-    def _create_default_node(self, schema: SchemaObject) -> EmbeddingNode[Vector, Vector]:
+    def _create_default_node(self, schema: IdSchemaObject) -> EmbeddingNode[Vector, Vector]:
         return CustomVectorEmbeddingNode(None, self.transformation_config, self.vector.fields, schema)
 
     def _calculate_schema_node_map(
-        self, transformation_config: TransformationConfig
-    ) -> dict[SchemaObject, EmbeddingNode[Vector, Vector]]:
+        self, transformation_config: TransformationConfig, salt: str | None
+    ) -> dict[IdSchemaObject, EmbeddingNode[Vector, Vector]]:
         unchecked_custom_node_map = {
             vector_schema_field: CustomVectorEmbeddingNode(
                 parent=SchemaFieldNode(vector_schema_field),
                 transformation_config=transformation_config,
                 fields_for_identification=self.vector.fields,
+                salt=salt,
             )
             for vector_schema_field in self.vector.fields
         }
-        schema_node_map: dict[SchemaObject, EmbeddingNode[Vector, Vector]] = {
+        schema_node_map: dict[IdSchemaObject, EmbeddingNode[Vector, Vector]] = {
             schema_field.schema_obj: node for schema_field, node in unchecked_custom_node_map.items()
         }
         return schema_node_map

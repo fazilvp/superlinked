@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 from dataclasses import dataclass
+
+from superlinked.framework.common.exception import InvalidInputException
 
 
 @dataclass(frozen=True)
@@ -22,7 +25,7 @@ class BlobInformation:
 
     def __post_init__(self) -> None:
         if self.data is None and self.path is None:
-            raise ValueError(f"{type(self).__name__} must have a non-null data or path.")
+            raise InvalidInputException(f"{type(self).__name__} must have a non-null data or path.")
 
     @property
     def original(self) -> str:
@@ -30,5 +33,5 @@ class BlobInformation:
         if self.path is not None:
             return_value = self.path
         elif self.data is not None:
-            return_value = self.data.decode("utf-8")
+            return_value = base64.b64encode(self.data).decode("utf-8")
         return return_value

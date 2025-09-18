@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
+from collections.abc import Mapping
 
 from beartype.typing import Any, Sequence, cast
 from qdrant_client import QdrantClient
@@ -31,10 +32,13 @@ from qdrant_client.models import (
 )
 from typing_extensions import override
 
+from superlinked.framework.common.exception import (
+    InvalidStateException,
+    UnexpectedResponseException,
+)
 from superlinked.framework.common.storage.entity.entity import Entity
 from superlinked.framework.common.storage.entity.entity_data import EntityData
 from superlinked.framework.common.storage.entity.entity_id import EntityId
-from superlinked.framework.common.storage.exception import IndexConfigNotFoundException
 from superlinked.framework.common.storage.field.field import Field
 from superlinked.framework.common.storage.field.field_data import FieldData
 from superlinked.framework.common.storage.field.field_data_type import FieldDataType
@@ -73,13 +77,18 @@ ID_PAYLOAD_FIELD = Field(FieldDataType.STRING, ID_PAYLOAD_FIELD_NAME)
 
 
 class QdrantVDBConnector(VDBConnector[VDBKNNSearchConfig]):
-    def __init__(self, connection_params: QdrantConnectionParams, vdb_settings: VDBSettings) -> None:
+    def __init__(
+        self,
+        connection_params: QdrantConnectionParams,
+        vdb_settings: VDBSettings,
+        client_params: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(vdb_settings=vdb_settings)
+
         self._client = QdrantClient(
             url=connection_params.connection_string,
             api_key=connection_params._api_key,
-            timeout=connection_params.timeout,
-            prefer_grpc=connection_params.prefer_grpc,
+            **client_params or {},
         )
         self._encoder = QdrantFieldEncoder(self.vector_precision)
         self.__search_index_manager = QdrantSearchIndexManager(self._client)
@@ -108,10 +117,10 @@ class QdrantVDBConnector(VDBConnector[VDBKNNSearchConfig]):
         )
 
     @override
-    async def write_entities(self, entity_data: Sequence[EntityData]) -> None:
+    async def _write_entities(self, entity_data: Sequence[EntityData]) -> None:
         if not self.search_index_manager._index_configs:
-            raise IndexConfigNotFoundException(
-                f"{type(self).__name__} can work properly only after initializing " + "the search indices."
+            raise InvalidStateException(
+                f"{type(self).__name__} can work properly only after initializing the search indices."
             )
         points = [
             PointStruct(
@@ -171,7 +180,7 @@ class QdrantVDBConnector(VDBConnector[VDBKNNSearchConfig]):
         return non_existing_points, existing_points
 
     @override
-    async def read_entities(self, entities: Sequence[Entity]) -> Sequence[EntityData]:
+    async def _read_entities(self, entities: Sequence[Entity]) -> list[EntityData]:
         returned_field_names = {field.name for entity in entities for field in entity.fields.values()} | {
             ID_PAYLOAD_FIELD_NAME
         }
@@ -272,12 +281,12 @@ class QdrantVDBConnector(VDBConnector[VDBKNNSearchConfig]):
         if point.vector is None:
             return {}
         if not isinstance(point.vector, dict) or any(v for v in point.vector.values() if not isinstance(v, list)):
-            raise ValueError(f"Retrieved point's payload is invalid: {[point.payload]}")
+            raise UnexpectedResponseException(f"Retrieved point's payload is invalid: {[point.payload]}")
         return cast(dict[str, list[float]], point.vector)
 
     def _check_and_get_payload(self, point: Record | ScoredPoint) -> dict[str, Any]:
         if point.payload is None or not isinstance(point.payload, dict):
-            raise ValueError(f"Retrieved point's payload is invalid: {[point.payload]}")
+            raise UnexpectedResponseException(f"Retrieved point's payload is invalid: {[point.payload]}")
         return cast(dict[str, Any], point.payload)
 
     @staticmethod
@@ -291,7 +300,7 @@ class QdrantVDBConnector(VDBConnector[VDBKNNSearchConfig]):
     def _entity_id_from_payload(self, payload: Payload) -> EntityId:
         id_str = payload.get(ID_PAYLOAD_FIELD_NAME)
         if id_str is None or not isinstance(id_str, str):
-            raise ValueError(f"The mandatory {ID_PAYLOAD_FIELD_NAME} is invalid: {id_str}.")
+            raise UnexpectedResponseException(f"The mandatory {ID_PAYLOAD_FIELD_NAME} is invalid: {id_str}.")
         schema_id, object_id = self._encoder._decode_base_type(id_str).split(":", 1)
         return EntityId(schema_id=schema_id, object_id=object_id)
 

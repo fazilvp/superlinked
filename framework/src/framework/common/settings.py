@@ -24,12 +24,11 @@ from pydantic_settings import (
 )
 from typing_extensions import override
 
-from superlinked.framework.common.util.singleton_decorator import singleton
-
 logger = structlog.getLogger()
 
 YAML_FILENAME = "config.yaml"
 FRAMEWORK_SECTION = "framework"
+IMAGE_SECTION = "image"
 RESOURCE_SECTION = "resource"
 
 
@@ -50,41 +49,29 @@ class YamlBasedSettings(BaseSettings):
             return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
 
-@singleton
 class Settings(YamlBasedSettings):
     """Common settings"""
 
     APP_ID: str = "default"
     # Embedding specific settings
     ENABLE_MPS: bool = False
-    SUPERLINKED_RESIZE_IMAGES: bool = False
+    # Batching specific settings
+    BATCHED_EMBEDDING_WAIT_TIME_MS: int = 0
+    BATCHED_VDB_READ_WAIT_TIME_MS: int = 0
+    BATCHED_BLOB_LOAD_WAIT_TIME_MS: int = 0
+    BATCHED_VDB_WRITE_WAIT_TIME_MS: int = 0
     # Embedding specific settings - model
+    MODEL_WARMUP: bool = False
     MODEL_CACHE_DIR: str | None = None
     MODEL_LOCK_TIMEOUT_SECONDS: int = 120
     SENTENCE_TRANSFORMERS_MODEL_LOCK_MAX_RETRIES: int = 10
     SENTENCE_TRANSFORMERS_MODEL_LOCK_RETRY_DELAY: int = 1
     SENTENCE_TRANSFORMERS_MODEL_LOCK_TIMEOUT_BUFFER_SECONDS: int = 10
     SENTENCE_TRANSFORMERS_MODEL_LOCK_TIMEOUT_MIN_SECONDS: int = 5
-    HUGGING_FACE_API_TOKEN: str | None = None  # TODO FAB-3560 - secret
-    # Embedding specific settings - modal
-    MODAL_APP_NAME: str = "App"
-    MODAL_CLASS_NAME: str = "Embedder"
-    MODAL_ENVIRONMENT_NAME: str = "main"
-    MODAL_IMAGE_FORMAT: str | None = "WebP"
-    MODAL_IMAGE_QUALITY: int = 95
-    MODAL_BATCH_SIZE: int = 5000
-    MODAL_MAX_RETRIES: int = 10
-    MODAL_RETRY_DELAY: float = 0.2
     # Blob loading settings
-    SUPERLINKED_CONCURRENT_BLOB_LOADING: bool = True
     BLOB_HANDLER_MODULE_PATH: str | None = None
     BLOB_HANDLER_CLASS_NAME: str | None = None
     BLOB_HANDLER_CLASS_ARGS: dict[str, Any] | None = None
-    REQUEST_TIMEOUT: int = 600  # 10min
-    # Profiling specific params
-    ENABLE_PROFILING: bool = False
-    SUPERLINKED_EXECUTION_TIMER_INTERVAL_MS: int = 10
-    SUPERLINKED_EXECUTION_TIMER_FILE_PATH: str | None = None  # path to profiling output json
     # Logging specific params
     SUPERLINKED_LOG_LEVEL: int | str | None = None
     SUPERLINKED_LOG_AS_JSON: bool = False
@@ -94,14 +81,9 @@ class Settings(YamlBasedSettings):
     # DAG visualization
     ENABLE_DAG_VISUALIZATION: bool = False
     DAG_VISUALIZATION_OUTPUT_DIR: str | None = None
-
-    """Online settings"""
+    # Online settings
     ONLINE_PUT_CHUNK_SIZE: int = 10000
-    ONLINE_EVENT_AGGREGATION_NODE_MAX_RETRY_COUNT: int = 5
-    SUPERLINKED_CONCURRENT_EFFECT_EVALUATION: bool = True
-    SUPERLINKED_CONCURRENT_ONLINE_DAG_EVALUATION: bool = False
-
-    """Query settings"""
+    # Query settings
     QUERY_TO_RETURN_ORIGIN_ID: bool = False
     # NLQ specific params
     SUPERLINKED_NLQ_MAX_RETRIES: int = 3
@@ -128,6 +110,17 @@ class Settings(YamlBasedSettings):
                 "Ensure all parameters are set for proper blob handler functionality.",
                 params=blob_params,
             )
+
+
+class ImageSettings(YamlBasedSettings):
+    RESIZE_IMAGE_WIDTH: int = 224
+    RESIZE_IMAGE_HEIGHT: int = 224
+    IMAGE_FORMAT: str = "WebP"
+    IMAGE_QUALITY: int = 95
+
+    model_config = SettingsConfigDict(
+        yaml_file=YAML_FILENAME, yaml_config_section=IMAGE_SECTION, extra="ignore", frozen=True
+    )
 
 
 class ExternalMessageBusSettings(BaseModel):
@@ -161,15 +154,15 @@ class ExternalMessageBusSettings(BaseModel):
 class VectorDatabaseSettings(BaseModel):
     INIT_SEARCH_INDICES: bool = True
     # Redis specific params
-    REDIS_MAX_CONNECTIONS: int = 1600  # Good for 8 workers
-    REDIS_SOCKET_TIMEOUT_SECONDS: float | None = 5.0
-    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float | None = 2.0
+    REDIS_MAX_CONNECTIONS: int = 170  # Aiming for 250 QPS
+    REDIS_SOCKET_TIMEOUT_SECONDS: float | None = 30.0
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float | None = 3.0
+    REDIS_HEALTH_CHECK_INTERVAL_SECONDS: float = 30
     REDIS_RETRY_ON_TIMEOUT: bool = True
     REDIS_DEFAULT_HYBRID_POLICY: str | None = None
     REDIS_DEFAULT_BATCH_SIZE: int | None = 250
 
 
-@singleton
 class ResourceSettings(YamlBasedSettings):
     external_message_bus: ExternalMessageBusSettings = ExternalMessageBusSettings()
     vector_database: VectorDatabaseSettings = VectorDatabaseSettings()
@@ -177,3 +170,10 @@ class ResourceSettings(YamlBasedSettings):
     model_config = SettingsConfigDict(
         yaml_file=YAML_FILENAME, yaml_config_section=RESOURCE_SECTION, extra="ignore", frozen=True
     )
+
+
+settings = Settings(_env_nested_delimiter="__")
+image_settings = ImageSettings(_env_nested_delimiter="__")
+resource_settings = ResourceSettings(_env_nested_delimiter="__")
+
+__all__ = ["settings", "resource_settings"]

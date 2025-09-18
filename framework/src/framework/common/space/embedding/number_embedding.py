@@ -20,7 +20,9 @@ from typing_extensions import TypeVar, override
 
 from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.space.config.embedding.number_embedding_config import (
+    LOG_BASE,
     LogarithmicScale,
     Mode,
     NumberEmbeddingConfig,
@@ -52,7 +54,7 @@ class NumberEmbedding(InvertibleEmbedding[NumberT, NumberEmbeddingConfig]):
         return self._config.length
 
     @override
-    async def embed(self, input_: float, context: ExecutionContext) -> Vector:
+    def embed(self, input_: float, context: ExecutionContext) -> Vector:
         if (
             input_ < self._config.min_value
             and self._config.mode
@@ -85,7 +87,9 @@ class NumberEmbedding(InvertibleEmbedding[NumberT, NumberEmbeddingConfig]):
         but it essentially performs the inverse operation of the embed function.
         """
         if len(vector.value) != self.length:
-            raise ValueError(f"Mismatching length {len(vector.value)} of the vector to inverse embed")
+            raise InvalidStateException(
+                "Mismatching length of the vector to inverse embed.", len_vector=len(vector.value)
+            )
         if list(vector.value) == self._value_when_out_of_bounds:
             out_of_bounds_bias: float = (self._config.max_value - self._config.min_value) / 1000.0
             if self._config.mode == Mode.MAXIMUM:
@@ -106,12 +110,10 @@ class NumberEmbedding(InvertibleEmbedding[NumberT, NumberEmbeddingConfig]):
         return True
 
     def _transform_to_log_if_logarithmic(self, value: float) -> float:
-        return (
-            math.log(1 + value, self._config.scale.base) if isinstance(self._config.scale, LogarithmicScale) else value
-        )
+        return math.log(1 + value, LOG_BASE) if isinstance(self._config.scale, LogarithmicScale) else value
 
     def _transform_from_log_if_logarithmic(self, value: float) -> float:
         return round(
-            (self._config.scale.base**value - 1 if isinstance(self._config.scale, LogarithmicScale) else value),
+            (LOG_BASE**value - 1 if isinstance(self._config.scale, LogarithmicScale) else value),
             10,
         )

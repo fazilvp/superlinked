@@ -13,20 +13,24 @@
 # limitations under the License.
 
 
+import asyncio
 import warnings
 from pathlib import Path
 
 import structlog
 import torch
 from beartype.typing import Any, Sequence, cast
-from PIL.Image import Image as PILImage
 from torchvision.transforms.transforms import Compose
 from typing_extensions import override
 
+from superlinked.framework.common.exception import (
+    NotImplementedException,
+    RequestTimeoutException,
+)
 from superlinked.framework.common.precision import Precision
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInputT,
+    ModelEmbeddingInput,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine import (
     EmbeddingEngine,
@@ -39,6 +43,7 @@ from superlinked.framework.common.space.embedding.model_based.model_downloader i
 )
 from superlinked.framework.common.util.collection_util import CollectionUtil
 from superlinked.framework.common.util.gpu_embedding_util import GpuEmbeddingUtil
+from superlinked.framework.common.util.image_util import ImageUtil, PILImage
 
 with warnings.catch_warnings():
     warnings.filterwarnings(
@@ -63,34 +68,49 @@ SUPPORTED_PRECISIONS = [Precision.FLOAT16, Precision.FLOAT32]
 
 class OpenCLIPEngine(EmbeddingEngine[EmbeddingEngineConfig]):
     def __init__(self, model_name: str, model_cache_dir: Path | None, config: EmbeddingEngineConfig) -> None:
-        super().__init__(model_name, model_cache_dir, config)
+        super().__init__(self._parse_model_name(model_name), model_cache_dir, config)
         self._embedding_model, self._preprocess_val = self._get_embedding_model()
         self._tokenizer = get_tokenizer(self._model_name)
 
     @override
-    async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
+    async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         text_inputs = [input_ for input_ in inputs if isinstance(input_, str)]
-        image_inputs = [input_ for input_ in inputs if isinstance(input_, PILImage)]
-        with torch.no_grad():
-            text_encodings = self.encode_texts(text_inputs)
-            image_encodings = self.encode_images(image_inputs)
+        image_inputs = await asyncio.gather(
+            *[asyncio.to_thread(ImageUtil.open_image, input_) for input_ in inputs if isinstance(input_, bytes)]
+        )
+        text_encodings, image_encodings = await asyncio.gather(
+            asyncio.to_thread(self._encode_texts_with_no_grad, text_inputs),
+            asyncio.to_thread(self._encode_images_with_no_grad, image_inputs),
+        )
         encodings = CollectionUtil.combine_values_based_on_type(
             inputs, text_encodings, image_encodings, type_condition=str
         )
         return [self._normalize_encoding(encoding).tolist() for encoding in encodings]
+
+    @override
+    def is_query_prompt_supported(self) -> bool:
+        return False
+
+    def _encode_texts_with_no_grad(self, text_inputs: Sequence[str]) -> torch.Tensor:
+        with torch.no_grad():
+            return self.encode_texts(text_inputs)
+
+    def _encode_images_with_no_grad(self, image_inputs: Sequence[PILImage]) -> torch.Tensor:
+        with torch.no_grad():
+            return self.encode_images(image_inputs)
 
     def _get_embedding_model(self) -> tuple[CLIP, Compose]:
         device = GpuEmbeddingUtil.get_device()
         model_downloader = ModelDownloader()
         cache_dir = model_downloader.get_cache_dir(self._model_cache_dir)
         if self.__is_model_name_from_hugging_face(self._model_name):
-            clean_model_name = self._model_name.replace(HF_HUB_PREFIX, "")
+            clean_model_name = self._get_clean_model_name(self._model_name)
             model_downloader.ensure_model_downloaded(clean_model_name, cache_dir)
         model_lock = model_downloader._get_model_lock(self._model_name)
-        model_lock_timeout = Settings().MODEL_LOCK_TIMEOUT_SECONDS
+        model_lock_timeout = settings.MODEL_LOCK_TIMEOUT_SECONDS
         if not model_downloader._acquire_lock_with_timeout(model_lock, model_lock_timeout):
             logger.warning(f"Timeout acquiring model lock for {self._model_name} after {model_lock_timeout} seconds")
-            raise TimeoutError(f"Timeout acquiring model lock for {self._model_name}")
+            raise RequestTimeoutException(f"Timeout acquiring model lock for {self._model_name}")
         cache_dir_text = str(cache_dir)
         try:
             model_and_transforms = create_model_and_transforms(
@@ -100,7 +120,9 @@ class OpenCLIPEngine(EmbeddingEngine[EmbeddingEngineConfig]):
             )
         except OSError:
             logger.warning("Model download issue, forcing re-download.")
-            model_downloader.ensure_model_downloaded(clean_model_name, cache_dir, force_download=True)
+            if self.__is_model_name_from_hugging_face(self._model_name):
+                clean_model_name = self._get_clean_model_name(self._model_name)
+                model_downloader.ensure_model_downloaded(clean_model_name, cache_dir, force_download=True)
             model_and_transforms = create_model_and_transforms(
                 self._model_name,
                 device=device,
@@ -138,7 +160,7 @@ class OpenCLIPEngine(EmbeddingEngine[EmbeddingEngineConfig]):
 
     def _use_half_precision(self) -> bool:
         if self._config.precision not in SUPPORTED_PRECISIONS:
-            raise ValueError(f"Unsupported precision: {self._config.precision.value}.")
+            raise NotImplementedException("Unsupported precision.", precision=self._config.precision.value)
         return self._config.precision == Precision.FLOAT16
 
     def _move_tensor_to_model_device(self, embedding_model: CLIP, tensor: torch.Tensor) -> torch.Tensor:
@@ -147,6 +169,16 @@ class OpenCLIPEngine(EmbeddingEngine[EmbeddingEngineConfig]):
             return tensor
         return tensor.to(model_device)
 
+    def _parse_model_name(self, model_name: str) -> str:
+        if model_name.startswith(HF_HUB_PREFIX) or not self.__is_model_name_from_hugging_face(model_name):
+            return model_name
+        return HF_HUB_PREFIX + model_name
+
     @classmethod
     def __is_model_name_from_hugging_face(cls, model_name: str) -> bool:
-        return model_name.startswith(HF_HUB_PREFIX)
+        return "/" in model_name
+
+    @classmethod
+    @override
+    def _get_clean_model_name(cls, model_name: str) -> str:
+        return model_name.replace(HF_HUB_PREFIX, "")

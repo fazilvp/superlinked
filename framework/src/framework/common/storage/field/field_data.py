@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from beartype.typing import Any, Generic, Sequence, TypeVar, get_args
+from beartype.typing import Any, Generic, TypeVar, get_args
 
 from superlinked.framework.common.data_types import Vector
-from superlinked.framework.common.schema.image_data import ImageData
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.storage.field.field import Field
 from superlinked.framework.common.storage.field.field_data_type import FieldDataType
 from superlinked.framework.common.storage.field_type_converter import (
@@ -36,66 +36,42 @@ class FieldData(Field, Generic[FT]):
         self.__validate_value(type_, value)
         self.value = value
 
-    def __validate_value(self, data_type: FieldDataType, value: FT) -> None:
-        valid_types = FieldTypeConverter.get_valid_node_data_types(data_type)
-        error_msg = "Invalid value {value} for the given field data type {data_type}"
-        if not isinstance(value, tuple(valid_types)):
-            raise ValueError(error_msg.format(value=value, data_type=data_type))
-        if isinstance(value, list):
-            # Assuming list types have only 1 valid type
-            valid_type = VALID_TYPE_BY_FIELD_DATA_TYPE[data_type][0]
-            generic_type = get_args(valid_type)[0]
-            if not all(isinstance(item, generic_type) for item in value):
-                raise ValueError(error_msg.format(value=value, data_type=data_type))
-
     @classmethod
     def from_field(cls, field: Field, value: FT) -> FieldData:
         return cls(field.data_type, field.name, value)
 
+    def __validate_value(self, data_type: FieldDataType, value: FT) -> None:
+        valid_types = FieldTypeConverter.get_valid_node_data_types(data_type)
+        if not isinstance(value, tuple(valid_types)):
+            self.__raise_validation_exception(data_type, value)
+        self.__validate_list_type(data_type, value)
 
-class BlobFieldData(FieldData[str]):
-    def __init__(self, name: str, value: str) -> None:
-        super().__init__(FieldDataType.BLOB, name, value)
+    def __validate_list_type(self, data_type: FieldDataType, value: FT) -> None:
+        if not isinstance(value, list):
+            return
+        if data_type == FieldDataType.FLOAT_LIST:
+            if self.__is_valid_float_list(value):
+                return
+            self.__raise_validation_exception(data_type, value)
+        valid_type = VALID_TYPE_BY_FIELD_DATA_TYPE[data_type][0]
+        generic_type = get_args(valid_type)[0]
+        if not all(isinstance(item, generic_type) for item in value):
+            self.__raise_validation_exception(data_type, value)
 
+    def __is_valid_float_list(self, value: list[Any]) -> bool:
+        """
+        This is a performance hot-spot. It needs to be fast as we use it
+        for custom space input validation where we can have long float lists
+        """
+        try:
+            for item in value:
+                float(item)
+            return True
+        except (ValueError, TypeError):
+            return False
 
-class ImageDataFieldData(FieldData[ImageData]):
-    def __init__(self, name: str, value: ImageData) -> None:
-        super().__init__(FieldDataType.IMAGE_DATA, name, value)
-
-
-class DoubleFieldData(FieldData[float]):
-    def __init__(self, name: str, value: float) -> None:
-        super().__init__(FieldDataType.DOUBLE, name, value)
-
-
-class IntFieldData(FieldData[int]):
-    def __init__(self, name: str, value: int) -> None:
-        super().__init__(FieldDataType.INT, name, value)
-
-
-class BooleanFieldData(FieldData[bool]):
-    def __init__(self, name: str, value: bool) -> None:
-        super().__init__(FieldDataType.BOOLEAN, name, value)
-
-
-class JsonFieldData(FieldData[dict[str, Any]]):
-    def __init__(self, name: str, value: dict[str, Any]) -> None:
-        super().__init__(FieldDataType.JSON, name, value)
-
-
-class FloatListFieldData(FieldData[Sequence[float]]):
-    def __init__(self, name: str, value: Sequence[float]) -> None:
-        super().__init__(FieldDataType.FLOAT_LIST, name, value)
-
-
-class StringListFieldData(FieldData[list[str]]):
-    def __init__(self, name: str, value: list[str]) -> None:
-        super().__init__(FieldDataType.STRING_LIST, name, value)
-
-
-class StringFieldData(FieldData[str]):
-    def __init__(self, name: str, value: str) -> None:
-        super().__init__(FieldDataType.STRING, name, value)
+    def __raise_validation_exception(self, data_type: FieldDataType, value: Any) -> None:
+        raise InvalidInputException(f"Invalid value {value} for the given field data type {data_type}")
 
 
 class VectorFieldData(FieldData[Vector]):

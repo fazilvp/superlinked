@@ -17,11 +17,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from beartype.typing import Mapping, Sequence
+from beartype.typing import Awaitable, Callable, Mapping, Sequence
 
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.delayed_evaluator import DelayedEvaluator
+from superlinked.framework.common.exception import NotImplementedException
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInputT,
+    ModelEmbeddingInput,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine import (
     EmbeddingEngine,
@@ -29,14 +32,10 @@ from superlinked.framework.common.space.embedding.model_based.engine.embedding_e
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine_config import (
     EmbeddingEngineConfig,
 )
-from superlinked.framework.common.space.embedding.model_based.engine.hugging_face_engine import (
-    HuggingFaceEngine,
-)
 from superlinked.framework.common.space.embedding.model_based.engine.modal_engine import (
     ModalEngine,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.open_clip_engine import (
-    HF_HUB_PREFIX,
     OpenCLIPEngine,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.sentence_transformers_engine import (
@@ -53,15 +52,13 @@ from superlinked.framework.common.space.embedding.model_based.model_handler impo
     ModelHandlerType,
     TextModelHandler,
 )
-from superlinked.framework.common.telemetry.telemetry_registry import TelemetryRegistry
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 
 ENGINE_BY_HANDLER: Mapping[ModelHandlerType, type[EmbeddingEngine]] = {
     TextModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
-    TextModelHandler.HUGGING_FACE: HuggingFaceEngine,
     TextModelHandler.MODAL: ModalEngine,
     TextModelHandler.TRITON: TritonEngine,
     ModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
-    ModelHandler.HUGGING_FACE: HuggingFaceEngine,
     ModelHandler.OPEN_CLIP: OpenCLIPEngine,
     ModelHandler.MODAL: ModalEngine,
 }
@@ -71,80 +68,32 @@ logger = structlog.getLogger()
 
 class EmbeddingEngineManager:
     def __init__(self) -> None:
-        self._engines: dict[str, EmbeddingEngine] = {}
-        self._telemetry = TelemetryRegistry()
-
-    def get_engine(
-        self,
-        model_handler: ModelHandlerType,
-        model_name: str,
-        model_cache_dir: Path | None,
-        config: EmbeddingEngineConfig,
-    ) -> EmbeddingEngine:
-        """
-        Get or create an embedding engine based on the provided config.
-        Returns existing engine if one with matching parameters exists.
-        """
-        engine_key = self.calculate_engine_key(model_handler, model_name, model_cache_dir, config)
-        if engine_key in self._engines:
-            return self._engines[engine_key]
-        if engine_type := ENGINE_BY_HANDLER.get(model_handler):
-            engine = engine_type(model_name, model_cache_dir, config)
-            self._engines[engine_key] = engine
-            return engine
-        raise ValueError(f"Unsupported model handler: {model_handler.value}")
-
-    @classmethod
-    def calculate_engine_key(
-        cls,
-        model_handler: ModelHandlerType,
-        model_name: str,
-        model_cache_dir: Path | None,
-        config: EmbeddingEngineConfig,
-    ) -> str:
-        clean_model_name = cls._get_clean_model_name(model_handler, model_name)
-        parts = [model_handler.value, clean_model_name, config, model_cache_dir]
-        engine_key = ":".join(str(part) for part in parts if part is not None)
-        return engine_key
-
-    @classmethod
-    def _get_clean_model_name(cls, model_handler: ModelHandlerType, model_name: str) -> str:
-        if cls._is_sentence_transformers_model_without_prefix(model_handler, model_name):
-            return f"sentence-transformers/{model_name}"
-        return model_name.replace(HF_HUB_PREFIX, "")
-
-    @classmethod
-    def _is_sentence_transformers_model_without_prefix(cls, model_handler: ModelHandlerType, model_name: str) -> bool:
-        return (
-            model_handler in [TextModelHandler.SENTENCE_TRANSFORMERS, ModelHandler.SENTENCE_TRANSFORMERS]
-            and "/" not in model_name
-        )
-
-    def clear_engines(self) -> None:
-        self._engines.clear()
+        self._key_to_engine: dict[str, EmbeddingEngine] = {}
+        self._key_to_delayed_evaluator: dict[tuple[str, bool], DelayedEvaluator] = {}
 
     async def embed(  # pylint: disable=too-many-arguments
         self,
         model_handler: ModelHandlerType,
         model_name: str,
-        inputs: Sequence[ModelEmbeddingInputT],
+        inputs: Sequence[ModelEmbeddingInput],
         is_query_context: bool,
         model_cache_dir: Path | None,
         config: EmbeddingEngineConfig,
     ) -> list[Vector]:
         if not inputs:
             return []
-        engine = self.get_engine(model_handler, model_name, model_cache_dir, config)
         labels = {
             "model_name": model_name,
             "handler": model_handler.value,
-            "is_query_context": str(is_query_context),
+            "is_query_context": is_query_context,
             "precision": config.precision.value,
+            "n_input": len(inputs),
         }
-        self._telemetry.record_metric("embeddings_total", len(inputs), labels=labels)
-        with self._telemetry.span("embedding_engine.embed", attributes=labels):
-            embeddings = await engine.embed(inputs, is_query_context)
-        return [Vector(embedding) for embedding in embeddings]
+        with telemetry.span("engine.embed", attributes=labels):
+            telemetry.record_metric("engine.embed.count", len(inputs), labels=labels)
+            engine = self._get_engine(model_handler, model_name, model_cache_dir, config)
+            embeddings = await self._get_delayed_evaluator(engine, is_query_context).evaluate(inputs)
+            return [Vector(embedding) for embedding in embeddings]
 
     async def calculate_length(
         self,
@@ -153,10 +102,56 @@ class EmbeddingEngineManager:
         model_cache_dir: Path | None,
         config: EmbeddingEngineConfig,
     ) -> int:
-        clean_model_name = self._get_clean_model_name(model_handler, model_name)
-        if clean_model_name in MODEL_DIMENSION_BY_NAME:
-            length = MODEL_DIMENSION_BY_NAME[clean_model_name]
-            return length
-        length = await self.get_engine(model_handler, model_name, model_cache_dir, config).length
-        logger.info("Consider caching model dimension.", model_name=clean_model_name, dimension=length)
+        engine_type = self._get_engine_type(model_handler)
+        clean_model_name = engine_type.calculate_key(model_name, model_cache_dir, config)
+        if not settings.MODEL_WARMUP and clean_model_name in MODEL_DIMENSION_BY_NAME:
+            return MODEL_DIMENSION_BY_NAME[clean_model_name]
+        length = await self._get_engine(model_handler, model_name, model_cache_dir, config).length
+        if model_handler not in [ModelHandler.MODAL, TextModelHandler.MODAL]:
+            logger.info("Consider caching model dimension.", model_name=clean_model_name, dimension=length)
         return length
+
+    def clear_engines(self) -> None:
+        self._key_to_engine.clear()
+
+    def _get_engine(
+        self,
+        model_handler: ModelHandlerType,
+        model_name: str,
+        model_cache_dir: Path | None,
+        config: EmbeddingEngineConfig,
+    ) -> EmbeddingEngine:
+        engine_type = self._get_engine_type(model_handler)
+        engine_key = engine_type.calculate_key(model_name, model_cache_dir, config)
+        if engine_key not in self._key_to_engine:
+            engine = engine_type(model_name, model_cache_dir, config)
+            self._key_to_engine[engine_key] = engine
+            self._create_delayed_evaluators(engine, engine_key)
+        return self._key_to_engine[engine_key]
+
+    def _create_delayed_evaluators(self, engine: EmbeddingEngine, engine_key: str) -> None:
+        delay_ms = settings.BATCHED_EMBEDDING_WAIT_TIME_MS
+        for is_query in [False, True]:
+            embed_fn = self._create_engine_embed_fn(engine, is_query)
+            self._key_to_delayed_evaluator[(engine_key, is_query)] = DelayedEvaluator(
+                delay_ms=delay_ms, eval_fn=embed_fn, task_name=f"{engine._model_name} embed"
+            )
+
+    def _create_engine_embed_fn(
+        self, engine: EmbeddingEngine, is_query: bool
+    ) -> Callable[[Sequence[ModelEmbeddingInput]], Awaitable[list[list[float]]]]:
+        async def embed_fn(inputs: Sequence[ModelEmbeddingInput]) -> list[list[float]]:
+            return await engine.embed(inputs, is_query)
+
+        return embed_fn
+
+    def _get_delayed_evaluator(self, engine: EmbeddingEngine, is_query_context: bool) -> DelayedEvaluator:
+        key = (engine.key, is_query_context and engine.is_query_prompt_supported())
+        if (delayed_evaluator := self._key_to_delayed_evaluator.get(key)) is not None:
+            return delayed_evaluator
+        raise NotImplementedException("No delayed evaluator found.", engine_key=key)
+
+    def _get_engine_type(self, model_handler: ModelHandlerType) -> type[EmbeddingEngine]:
+        if (engine_type := ENGINE_BY_HANDLER.get(model_handler)) is not None:
+            return engine_type
+        raise NotImplementedException("Unsupported model handler.", model_handler=model_handler.value)

@@ -15,8 +15,7 @@
 
 from abc import ABC, abstractmethod
 
-from beartype.typing import Generic, Sequence
-from typing_extensions import Annotated
+from beartype.typing import Annotated, Generic, Sequence
 
 from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.util.generic_class_util import GenericClassUtil
@@ -65,7 +64,3 @@ class Executor(ABC, Generic[SourceT]):
         Returns:
             App: An instance of App.
         """
-
-    def _prohibit_bytes_input(self) -> None:
-        for source in self._sources:
-            source.parser.set_allow_bytes_input(False)

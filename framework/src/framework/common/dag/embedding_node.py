@@ -20,7 +20,8 @@ from typing_extensions import override
 
 from superlinked.framework.common.dag.node import Node, NodeDataT
 from superlinked.framework.common.data_types import Vector
-from superlinked.framework.common.schema.schema_object import SchemaField, SchemaObject
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
+from superlinked.framework.common.schema.schema_object import SchemaField
 from superlinked.framework.common.space.config.aggregation.aggregation_config import (
     AggregationInputT,
 )
@@ -42,14 +43,15 @@ class EmbeddingNode(
         parents: Sequence[Node | None],
         transformation_config: TransformationConfig[AggregationInputT, NodeDataT],
         fields_for_identification: set[SchemaField],
-        schema: SchemaObject | None = None,
+        schema: IdSchemaObject | None = None,
+        salt: str | None = None,
     ) -> None:
         super().__init__(
             Vector,
             [parent for parent in parents if parent is not None],
             {schema} if schema else None,
         )
-        self._identifier = self._calculate_node_id_identifier(fields_for_identification)
+        self._identifier = self._calculate_node_id_identifier(fields_for_identification, salt)
         self._transformation_config = transformation_config
 
     @property
@@ -64,7 +66,7 @@ class EmbeddingNode(
     ) -> TransformationConfig[AggregationInputT, NodeDataT]:
         return self._transformation_config
 
-    def _calculate_node_id_identifier(self, fields: set[SchemaField]) -> str:
+    def _calculate_node_id_identifier(self, fields: set[SchemaField], salt: str | None = None) -> str:
         """
         This method ensures unique node ID generation by creating a hash of
         - concatenated field names when multiple fields exist
@@ -76,7 +78,8 @@ class EmbeddingNode(
             return ""
         field_names_text = str(sorted([field.name for field in fields]))
         schema_names_text = str(sorted([schema._schema_name for schema in self.schemas]))
-        return hashlib.md5((field_names_text + schema_names_text).encode()).hexdigest()[:8]
+        salt = salt or ""
+        return hashlib.md5((field_names_text + schema_names_text + salt).encode()).hexdigest()[:8]
 
     @override
     def _get_node_id_parameters(self) -> dict[str, Any]:

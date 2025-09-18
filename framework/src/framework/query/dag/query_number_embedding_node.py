@@ -20,6 +20,7 @@ from typing_extensions import override
 from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.dag.number_embedding_node import NumberEmbeddingNode
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.space.config.embedding.number_embedding_config import (
     Mode,
     NumberEmbeddingConfig,
@@ -27,7 +28,6 @@ from superlinked.framework.common.space.config.embedding.number_embedding_config
 from superlinked.framework.common.space.normalization.normalization_factory import (
     NormalizationFactory,
 )
-from superlinked.framework.query.dag.exception import QueryEvaluationException
 from superlinked.framework.query.dag.query_embedding_orphan_node import (
     QueryEmbeddingOrphanNode,
 )
@@ -77,15 +77,15 @@ class QueryNumberEmbeddingNode(QueryEmbeddingOrphanNode[float, NumberEmbeddingNo
         if not corresponding_inputs:
             return None
         if len(corresponding_inputs) > 1:
-            raise QueryEvaluationException(
-                f"Number embedding node with mode {self._embedding_config.mode} "
-                f"can only handle a single input, got {len(corresponding_inputs)}."
+            raise InvalidStateException(
+                f"Number embedding node with mode {self._embedding_config.mode.name} supports only a single input.",
+                input_count=len(corresponding_inputs),
             )
         input_value = corresponding_inputs[0].value
         if not isinstance(input_value.item, Vector):
-            raise QueryEvaluationException(
-                f"Number embedding node with mode {self._embedding_config.mode} "
-                f"can only handle a Vector input, got {type(input_value.item).__name__}."
+            raise InvalidStateException(
+                f"Number embedding node with mode {self._embedding_config.mode.name} can only handle a Vector input.",
+                input_count=len(corresponding_inputs),
             )
         weight = input_value.weight.get(self.node_id) if isinstance(input_value.weight, dict) else input_value.weight
         return weight == 0

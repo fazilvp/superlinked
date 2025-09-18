@@ -26,7 +26,12 @@ from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 from requests.exceptions import ReadTimeout
 
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.exception import (
+    InvalidStateException,
+    RequestTimeoutException,
+)
+from superlinked.framework.common.settings import settings
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 
 logger = structlog.getLogger()
 
@@ -39,13 +44,13 @@ class ModelDownloader:
     _lock: Lock = Lock()
     _download_locks: dict[str, Lock] = {}
     _download_locks_lock: Lock = Lock()
-    _framework_settings = Settings()
+    _framework_settings = settings
 
     def __new__(cls) -> ModelDownloader:
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
-                cls._instance._framework_settings = Settings()
+                cls._instance._framework_settings = settings
         return cls._instance
 
     def get_cache_dir(self, model_cache_dir: Path | None) -> Path:
@@ -78,7 +83,7 @@ class ModelDownloader:
 
         if not self._acquire_lock_with_timeout(model_lock, model_lock_timeout):
             logger.warning(f"Timeout acquiring model lock for {model_name} after {model_lock_timeout} seconds")
-            raise TimeoutError(f"Timeout acquiring model lock for {model_name}")
+            raise RequestTimeoutException(f"Timeout acquiring model lock for {model_name}")
 
         try:
             # Skip this check if force_download is True
@@ -92,20 +97,31 @@ class ModelDownloader:
                         if not force_download and self._is_model_downloaded(model_name, cache_dir):
                             return self._get_model_folder_path(model_name, cache_dir)
                         logger.info(f"Downloading model {model_name} to {cache_dir}")
-                        snapshot_download(repo_id=model_name, cache_dir=str(cache_dir))
+                        with telemetry.span(
+                            "model.download", attributes={"model_name": model_name, "cache_dir": str(cache_dir)}
+                        ):
+                            snapshot_download(repo_id=model_name, cache_dir=str(cache_dir))
                         model_path = self._get_model_folder_path(model_name, cache_dir)
                         if not model_path.exists():
-                            raise RuntimeError(f"Model download completed but path {model_path} does not exist")
+                            raise InvalidStateException(
+                                "Model download completed but path does not exist.", model_path=model_path
+                            )
 
                         return model_path
-                except (ReadTimeout, TimeoutError, HfHubHTTPError, LocalEntryNotFoundError) as e:
+                except (
+                    ReadTimeout,
+                    TimeoutError,
+                    RequestTimeoutException,
+                    HfHubHTTPError,
+                    LocalEntryNotFoundError,
+                ) as e:
                     logger.warning(
                         f"Attempt {attempt + 1}/{max_retries}: Issue downloading {model_name}, "
                         f"retrying in {retry_delay} seconds... Error: {str(e)}"
                     )
                     time.sleep(retry_delay)
 
-            raise RuntimeError(f"Failed to download model {model_name} after {max_retries} attempts")
+            raise RequestTimeoutException(f"Failed to download model {model_name} after {max_retries} attempts")
         finally:
             model_lock.release()
 

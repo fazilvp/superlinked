@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
 
 from redis import Redis as SyncRedis
 from redis.asyncio import Redis as AsyncRedis
-from redis.asyncio.connection import ConnectionPool
+from redis.asyncio.connection import BlockingConnectionPool, ConnectionPool
 
 from superlinked.framework.common.settings import ResourceSettings
 
-CONNECTION_REFRESH_INTERVAL_SECONDS = 1800
 REDIS_PROTOCOL = 3
 
 
@@ -29,7 +27,6 @@ class RedisVDBClient:
 
     def __init__(self, connection_string: str) -> None:
         self._connection_string = connection_string
-        self._last_activity_time = time.time()
         self.__async_client = self._create_async_client()
         self.__sync_client = self._create_sync_client()
 
@@ -38,7 +35,6 @@ class RedisVDBClient:
         """
         Property to access the Redis client with connection refresh.
         """
-        self._refresh_connection_if_needed()
         return self.__async_client
 
     @property
@@ -53,19 +49,14 @@ class RedisVDBClient:
 
     def _create_async_client(self) -> AsyncRedis:
         settings = ResourceSettings().vector_database
-        pool: ConnectionPool = ConnectionPool.from_url(
+        pool: ConnectionPool = BlockingConnectionPool.from_url(
             self._connection_string,
             protocol=REDIS_PROTOCOL,
             max_connections=settings.REDIS_MAX_CONNECTIONS,
             socket_timeout=settings.REDIS_SOCKET_TIMEOUT_SECONDS,
             socket_connect_timeout=settings.REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS,
             retry_on_timeout=settings.REDIS_RETRY_ON_TIMEOUT,
+            socket_keepalive=True,  # Otherwise you get TimeoutError after a day
+            health_check_interval=settings.REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
         )
         return AsyncRedis(connection_pool=pool)
-
-    def _refresh_connection_if_needed(self) -> None:
-        current_time = time.time()
-        if current_time - self._last_activity_time > CONNECTION_REFRESH_INTERVAL_SECONDS:
-            self.__sync_client.close()
-            self.__sync_client = self._create_sync_client()
-        self._last_activity_time = current_time

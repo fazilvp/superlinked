@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from types import NoneType
+
 from beartype.typing import Any, Sequence, cast
 
 from superlinked.framework.common.data_types import NodeDataTypes, Vector
+from superlinked.framework.common.exception import NotImplementedException
 from superlinked.framework.common.schema.blob_information import BlobInformation
 from superlinked.framework.common.schema.id_field import IdField
 from superlinked.framework.common.schema.image_data import ImageData
@@ -60,7 +63,7 @@ FIELD_DATA_TYPE_BY_NODE_DATA_TYPE: dict[type[NodeDataTypes | dict], FieldDataTyp
     BlobInformation: FieldDataType.BLOB,
 }
 
-VALID_TYPE_BY_FIELD_DATA_TYPE: dict[FieldDataType, Sequence[type[NodeDataTypes | dict]]] = {
+VALID_TYPE_BY_FIELD_DATA_TYPE: dict[FieldDataType, Sequence[type[NodeDataTypes | dict | None]]] = {
     FieldDataType.BLOB: [BlobInformation],
     FieldDataType.DOUBLE: [int, float],
     FieldDataType.INT: [int],
@@ -72,6 +75,7 @@ VALID_TYPE_BY_FIELD_DATA_TYPE: dict[FieldDataType, Sequence[type[NodeDataTypes |
     FieldDataType.METADATA_STRING: [str],
     FieldDataType.VECTOR: [Vector],
     FieldDataType.IMAGE_DATA: [ImageData],
+    FieldDataType.NULL: [NoneType],
 }
 
 
@@ -84,13 +88,13 @@ class FieldTypeConverter:
             cast(type[ConcreteSchemaField], schema_field_cls)
         ):
             return field_data_type
-        raise NotImplementedError(f"Unknown schema field type: {schema_field_cls.__name__}")
+        raise NotImplementedException("Unsupported schema field type.", schema_field_type=schema_field_cls.__name__)
 
     @staticmethod
     def convert_node_data_type(type_: type[NodeDataTypes]) -> FieldDataType:
         if field_data_type := FIELD_DATA_TYPE_BY_NODE_DATA_TYPE.get(cast(type[NodeDataTypes], type_)):
             return field_data_type
-        raise NotImplementedError(f"Unknown python type: {type_}")
+        raise NotImplementedException("Unknown python type.", type_name=type_.__name__)
 
     @staticmethod
     def get_valid_node_data_types(

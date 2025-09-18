@@ -16,19 +16,19 @@ from pathlib import Path
 
 import structlog
 from beartype.typing import Sequence
-from PIL.Image import Image
 from typing_extensions import override
 
 from superlinked.framework.common.dag.embedding_node import EmbeddingNode
 from superlinked.framework.common.dag.image_embedding_node import ImageEmbeddingNode
 from superlinked.framework.common.dag.schema_field_node import SchemaFieldNode
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidInputException
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.schema.image_data import ImageData
 from superlinked.framework.common.schema.schema_object import (
     Blob,
     DescribedBlob,
     SchemaField,
-    SchemaObject,
     String,
 )
 from superlinked.framework.common.space.config.aggregation.aggregation_config import (
@@ -54,7 +54,7 @@ from superlinked.framework.common.space.embedding.model_based.singleton_embeddin
     SingletonEmbeddingEngineManager,
 )
 from superlinked.framework.common.util.async_util import AsyncUtil
-from superlinked.framework.dsl.space.exception import InvalidSpaceParamException
+from superlinked.framework.common.util.image_util import PILImage
 from superlinked.framework.dsl.space.image_space_field_set import (
     ImageDescriptionSpaceFieldSet,
     ImageSpaceFieldSet,
@@ -63,29 +63,11 @@ from superlinked.framework.dsl.space.space import Space
 
 logger = structlog.getLogger()
 
-DEFAULT_DESCRIPTION_FIELD_PREFIX = "__SL_DEFAULT_DESCRIPTION_"
-
 
 class ImageSpace(Space[Vector, ImageData]):
     """
     Initialize the ImageSpace instance for generating vector representations
-    from images, supporting models from the OpenCLIP project.
-
-    Args:
-        image (Blob | DescribedBlob | Sequence[Blob | DescribedBlob]):
-            The image content as a Blob or DescribedBlob (write image+description), or a sequence of them.
-        model (str, optional): The model identifier for generating image embeddings.
-            Defaults to "clip-ViT-B-32".
-        model_handler (ModelHandler, optional): The handler for the model,
-            defaults to ModelHandler.SENTENCE_TRANSFORMERS.
-        model_cache_dir (Path | None, optional): Directory to cache downloaded models.
-            If None, uses the default cache directory. Defaults to None.
-        embedding_engine_config (EmbeddingEngineConfig, optional): Configuration for the embedding engine.
-            Defaults to EmbeddingEngineConfig().
-
-    Raises:
-        InvalidSpaceParamException: If the image and description fields are not
-            from the same schema.
+    from images, supporting models from the SentenceTransformers and OpenCLIP projects.
     """
 
     def __init__(
@@ -95,6 +77,7 @@ class ImageSpace(Space[Vector, ImageData]):
         model_cache_dir: Path | None = None,
         model_handler: ModelHandler = ModelHandler.SENTENCE_TRANSFORMERS,
         embedding_engine_config: EmbeddingEngineConfig | None = None,
+        salt: str | None = None,
     ) -> None:
         """
         Initialize the ImageSpace instance for generating vector representations
@@ -111,9 +94,11 @@ class ImageSpace(Space[Vector, ImageData]):
                 If None, uses the default cache directory. Defaults to None.
             embedding_engine_config (EmbeddingEngineConfig, optional): Configuration for the embedding engine.
                 Defaults to EmbeddingEngineConfig().
+            salt: (str | None, optional): Enables the creation of identical spaces to allow
+                different weighted event definitions with them.
 
         Raises:
-            InvalidSpaceParamException: If the image and description fields are not
+            InvalidInputException: If the image and description fields are not
                 from the same schema.
         """
         if embedding_engine_config is None:
@@ -122,16 +107,16 @@ class ImageSpace(Space[Vector, ImageData]):
         self.__validate_field_schemas(non_none_image)
         self.__validate_model_handler(model_handler, embedding_engine_config)
         image_fields, description_fields = self._split_images_from_descriptions(non_none_image)
-        super().__init__(image_fields, Blob)
+        super().__init__(image_fields, Blob, salt)
         length = AsyncUtil.run(
             SingletonEmbeddingEngineManager().calculate_length(
                 model_handler, model, model_cache_dir, embedding_engine_config
             )
         )
-        self.image = ImageSpaceFieldSet(self, set(image_fields), allowed_param_types=[str, Image])
+        self.image = ImageSpaceFieldSet(self, set(image_fields), allowed_param_types=[str, PILImage])
         self.description = ImageDescriptionSpaceFieldSet(
             self,
-            set(description for description in description_fields if description is not None),
+            {description for description in description_fields if description is not None},
             allowed_param_types=[str],
         )
         self._all_fields = self.image.fields | self.description.fields
@@ -139,7 +124,7 @@ class ImageSpace(Space[Vector, ImageData]):
             model, model_cache_dir, model_handler, length, embedding_engine_config
         )
         self.__embedding_node_by_schema = self._init_embedding_node_by_schema(
-            image_fields, description_fields, self._all_fields, self.transformation_config
+            image_fields, description_fields, self._all_fields, self.transformation_config, salt
         )
         self._model = model
 
@@ -149,17 +134,15 @@ class ImageSpace(Space[Vector, ImageData]):
             for image in (images if isinstance(images, Sequence) else [images])
             if isinstance(image, DescribedBlob)
         ):
-            raise InvalidSpaceParamException("ImageSpace image and description field must be in the same schema.")
+            raise InvalidInputException("ImageSpace image and description field must be in the same schema.")
 
     def __validate_model_handler(
         self, model_handler: ModelHandler, embedding_engine_config: EmbeddingEngineConfig
     ) -> None:
         if model_handler == ModelHandler.MODAL and not isinstance(embedding_engine_config, ModalEngineConfig):
-            raise ValueError(
-                (
-                    f"When using {ModelHandler.MODAL} as model_handler, embedding_engine_config must "
-                    f"be an instance of ModalEngineConfig, but got {type(embedding_engine_config).__name__}"
-                )
+            raise InvalidInputException(
+                f"When using {ModelHandler.MODAL} as model_handler, embedding_engine_config must "
+                f"be an instance of ModalEngineConfig, but got {type(embedding_engine_config).__name__}"
             )
 
     def _split_images_from_descriptions(
@@ -182,13 +165,12 @@ class ImageSpace(Space[Vector, ImageData]):
     @override
     def _embedding_node_by_schema(
         self,
-    ) -> dict[SchemaObject, EmbeddingNode[Vector, ImageData]]:
+    ) -> dict[IdSchemaObject, EmbeddingNode[Vector, ImageData]]:
         return self.__embedding_node_by_schema
 
     @override
-    def _create_default_node(self, schema: SchemaObject) -> EmbeddingNode[Vector, ImageData]:
-        default_node = ImageEmbeddingNode(None, None, self._transformation_config, self._all_fields, schema)
-        return default_node
+    def _create_default_node(self, schema: IdSchemaObject) -> EmbeddingNode[Vector, ImageData]:
+        return ImageEmbeddingNode(None, None, self._transformation_config, self._all_fields, schema)
 
     @property
     @override
@@ -232,13 +214,15 @@ class ImageSpace(Space[Vector, ImageData]):
         description_fields: Sequence[String | None],
         all_fields: set[SchemaField],
         transformation_config: TransformationConfig[Vector, ImageData],
-    ) -> dict[SchemaObject, EmbeddingNode[Vector, ImageData]]:
+        salt: str | None,
+    ) -> dict[IdSchemaObject, EmbeddingNode[Vector, ImageData]]:
         return {
             image_field.schema_obj: ImageEmbeddingNode(
                 image_blob_node=SchemaFieldNode(image_field),
                 description_node=SchemaFieldNode(description_field) if description_field is not None else None,
                 transformation_config=transformation_config,
                 fields_for_identification=all_fields,
+                salt=salt,
             )
             for image_field, description_field in zip(image_fields, description_fields)
         }

@@ -67,6 +67,8 @@ setup(
         # Utility libraries
         "furl",
         "modal",
+        "aiofiles",
+        "httpx",
         # OpenTelemetry dependencies
         "opentelemetry-api",
         "opentelemetry-sdk",

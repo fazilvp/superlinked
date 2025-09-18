@@ -16,17 +16,16 @@ import mimetypes
 from abc import abstractmethod
 from urllib.parse import unquote, urlparse
 
+from beartype.typing import Sequence
+
 from superlinked.framework.blob.blob_metadata import BlobMetadata
 from superlinked.framework.common.schema.blob_information import BlobInformation
 
 
 class BlobHandler:
-    @abstractmethod
-    def upload(self, object_key: str, data: bytes, metadata: BlobMetadata | None = None) -> None:
-        pass
 
     @abstractmethod
-    def download(self, object_key: str) -> bytes:
+    async def download(self, object_keys: Sequence[str]) -> list[BlobInformation]:
         pass
 
     @abstractmethod

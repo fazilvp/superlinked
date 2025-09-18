@@ -16,6 +16,7 @@ import numpy as np
 
 from superlinked.framework.common.calculation.distance_metric import DistanceMetric
 from superlinked.framework.common.data_types import NPArray, Vector
+from superlinked.framework.common.exception import NotImplementedException
 
 
 class VectorSimilarityCalculator:
@@ -30,10 +31,9 @@ class VectorSimilarityCalculator:
             case DistanceMetric.INNER_PRODUCT:
                 return self.__calculate_inner_product(vector_a, vector_b)
             case _:
-                raise ValueError(f"Unsupported calculation method: {self.__method}")
+                raise NotImplementedException("Unsupported calculation method.", method=self.__method)
 
     def __calculate_inner_product(self, vector_a: NPArray, vector_b: NPArray) -> float:
-
         return np.inner(  # type: ignore[attr-defined] # it exists
             vector_a,
             vector_b,

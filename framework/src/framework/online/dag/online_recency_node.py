@@ -21,15 +21,15 @@ from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.dag.recency_node import RecencyNode
 from superlinked.framework.common.data_types import Vector
 from superlinked.framework.common.interface.has_length import HasLength
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
+from superlinked.framework.common.parser.parsed_schema import ParsedSchema
 from superlinked.framework.common.transform.transform import Step
 from superlinked.framework.common.transform.transformation_factory import (
     TransformationFactory,
 )
-from superlinked.framework.common.util.async_util import AsyncUtil
 from superlinked.framework.online.dag.default_online_node import DefaultOnlineNode
 from superlinked.framework.online.dag.evaluation_result import SingleEvaluationResult
 from superlinked.framework.online.dag.online_node import OnlineNode
+from superlinked.framework.online.online_entity_cache import OnlineEntityCache
 
 DAY_IN_SECONDS: int = 24 * 60 * 60
 
@@ -39,9 +39,8 @@ class OnlineRecencyNode(DefaultOnlineNode[RecencyNode, Vector], HasLength):
         self,
         node: RecencyNode,
         parents: list[OnlineNode],
-        storage_manager: StorageManager,
     ) -> None:
-        super().__init__(node, parents, storage_manager)
+        super().__init__(node, parents)
         self._embedding_transformation = TransformationFactory.create_embedding_transformation(
             self.node.transformation_config
         )
@@ -56,14 +55,27 @@ class OnlineRecencyNode(DefaultOnlineNode[RecencyNode, Vector], HasLength):
         return self._embedding_transformation
 
     @override
-    def _evaluate_singles(
+    async def get_fallback_results(
+        self,
+        parsed_schemas: Sequence[ParsedSchema],
+        online_entity_cache: OnlineEntityCache,
+    ) -> list[Vector]:
+        schemas_with_object_ids = [(parsed_schema.schema, parsed_schema.id_) for parsed_schema in parsed_schemas]
+        stored_results = await self.load_stored_results(schemas_with_object_ids, online_entity_cache)
+        return [
+            Vector.init_zero_vector(self.length) if stored_result is None else stored_result
+            for stored_result in stored_results
+        ]
+
+    @override
+    async def _evaluate_singles(
         self,
         parent_results: Sequence[dict[OnlineNode, SingleEvaluationResult]],
         context: ExecutionContext,
     ) -> Sequence[Vector | None]:
-        return [self._evaluate_single(parent_result, context) for parent_result in parent_results]
+        return [await self._evaluate_single(parent_result, context) for parent_result in parent_results]
 
-    def _evaluate_single(
+    async def _evaluate_single(
         self,
         parent_results: dict[OnlineNode, SingleEvaluationResult],
         context: ExecutionContext,
@@ -71,4 +83,4 @@ class OnlineRecencyNode(DefaultOnlineNode[RecencyNode, Vector], HasLength):
         if len(parent_results.items()) != 1:
             return None
         input_: int = list(parent_results.values())[0].value
-        return AsyncUtil.run(self.embedding_transformation.transform(input_, context))
+        return await self.embedding_transformation.transform(input_, context)

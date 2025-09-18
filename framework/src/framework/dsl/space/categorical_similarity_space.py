@@ -22,9 +22,9 @@ from superlinked.framework.common.dag.categorical_similarity_node import (
 from superlinked.framework.common.dag.embedding_node import EmbeddingNode
 from superlinked.framework.common.dag.schema_field_node import SchemaFieldNode
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.schema.schema_object import (
     SchemaField,
-    SchemaObject,
     String,
     StringList,
 )
@@ -62,25 +62,6 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
     way other categories are not similar to each other in any case - not even to the same
     `other` category. To make that specific category value similar to only the same category
     items, consider adding it to `categories`.
-
-    Attributes:
-        category_input (StringList | String | list[String | StringList]):
-            The schema field containing input categories to be considered in the similarity space.
-            Input contains one or more categories in a list if `StringList` is provided.
-            If `String` is provided, then the input must be a single value.
-        categories (List[str]): A list of categories that defines the dimensionality of the
-            one-hot encoded vector. Any category not listed is considered as 'other'.
-        negative_filter (float): A value to represent unmatched categories in the one-hot vector.
-            Instead of using 0, which typically represents the absence of a category, this allows
-            for a different representation - resulting in effectively filtering out items that has
-            non-matching categories.
-        uncategorized_as_category (bool): If set to False, the similarity between other categories will be
-            set to 0, or negative_filter if set. By this we can control if a category_input not in
-            categories will be similar to other category_inputs not in categories. Note that the same
-            category_inputs not in categories will not be similar to each other either.
-    Raises:
-        InvalidSchemaException: If a schema object does not have a corresponding node in the
-            similarity space.
     """
 
     def __init__(
@@ -89,6 +70,7 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
         categories: list[str],
         negative_filter: float = 0.0,
         uncategorized_as_category: bool = True,
+        salt: str | None = None,
     ) -> None:
         """
         Initializes a new instance of the CategoricalSimilaritySpace.
@@ -108,9 +90,11 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
                  it is possible to influence the similarity score negatively. Defaults to 0.0.
             uncategorized_as_category (bool, optional): Determines whether categories not listed in `categories` should
                 be treated as a distinct 'other' category. Defaults to True.
+            salt: (str | None, optional): Enables the creation of identical spaces to allow
+                different weighted event definitions with them.
 
         Raises:
-            InvalidSchemaException: If a schema object does not have a corresponding node in the similarity space,
+            InvalidInputException: If a schema object does not have a corresponding node in the similarity space,
             indicating a configuration or implementation error.
         """
         non_none_category_input: list[String | StringList] = self._fields_to_non_none_sequence(category_input)
@@ -118,6 +102,7 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
         super().__init__(
             non_none_category_input,
             String | StringList,  # type: ignore[misc] # interface supports only one type
+            salt,
         )
         TypeValidator.validate_list_item_type(categories, str, "categories")
         self.__category = SpaceFieldSet[list[str]](self, set(non_none_category_input))
@@ -134,10 +119,11 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
                 parent=SchemaFieldNode(cast(SchemaField, single_category)),
                 transformation_config=self.transformation_config,
                 fields_for_identification=self.__category.fields,
+                salt=salt,
             )
             for single_category in non_none_category_input
         }
-        self.__schema_node_map: dict[SchemaObject, EmbeddingNode[Vector, list[str]]] = {
+        self.__schema_node_map: dict[IdSchemaObject, EmbeddingNode[Vector, list[str]]] = {
             schema_field.schema_obj: node for schema_field, node in unchecked_category_node_map.items()
         }
 
@@ -145,7 +131,7 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
     @override
     def _embedding_node_by_schema(
         self,
-    ) -> dict[SchemaObject, EmbeddingNode[Vector, list[str]]]:
+    ) -> dict[IdSchemaObject, EmbeddingNode[Vector, list[str]]]:
         return self.__schema_node_map
 
     def _init_transformation_config(
@@ -157,7 +143,7 @@ class CategoricalSimilaritySpace(Space[Vector, list[str]], HasSpaceFieldSet):
         return TransformationConfig(normalization_config, aggregation_config, embedding_config)
 
     @override
-    def _create_default_node(self, schema: SchemaObject) -> EmbeddingNode[Vector, list[str]]:
+    def _create_default_node(self, schema: IdSchemaObject) -> EmbeddingNode[Vector, list[str]]:
         return CategoricalSimilarityNode(None, self.transformation_config, self.__category.fields, schema)
 
     @property

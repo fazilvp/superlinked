@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from beartype.typing import Sequence, TypeVar
+from beartype.typing import Mapping, Sequence, TypeVar
 from furl import furl
 
-from superlinked.framework.common.util.execution_timer import time_execution_with_arg
-from superlinked.framework.dsl.executor.exception import DuplicateEndpointException
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.dsl.executor.rest.rest_configuration import (
     RestEndpointConfiguration,
     RestQuery,
@@ -50,19 +49,17 @@ class RestHandler:
         )
 
     @property
-    def ingest_paths(self) -> list[str]:
-        return list(self.__path_to_source_map.keys())
+    def path_to_source_map(self) -> Mapping[str, RestSource]:
+        return self.__path_to_source_map
 
     @property
-    def query_paths(self) -> list[str]:
-        return list(self.__path_to_query_map.keys())
+    def path_to_query_map(self) -> Mapping[str, RestQuery]:
+        return self.__path_to_query_map
 
-    @time_execution_with_arg("path")
-    def _ingest_handler(self, input_schema: dict, path: str) -> None:
+    async def _ingest_handler(self, input_schema: dict, path: str) -> None:
         source = self.__path_to_source_map[path]
-        source.put([input_schema])
+        await source.put_async(input_schema)
 
-    @time_execution_with_arg("path")
     async def _query_handler(
         self, query_descriptor: dict, path: str, query_user_config: QueryUserConfig
     ) -> QueryResult:
@@ -83,7 +80,7 @@ class RestHandler:
                 furl(path=api_root_path).path.add(path_prefix).add(resource.path)  # type: ignore[arg-type]
             )
             if path_string in path_to_resource:
-                raise DuplicateEndpointException(
+                raise InvalidInputException(
                     f"Endpoint duplication detected. The path: {path_string} has been previously added."
                 )
             path_to_resource[path_string] = resource

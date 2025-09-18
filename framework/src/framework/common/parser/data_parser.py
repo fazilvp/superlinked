@@ -19,25 +19,22 @@ from math import isfinite
 
 from beartype.typing import Generic, Mapping, Sequence, cast
 
-from superlinked.framework.common.exception import InitializationException
+from superlinked.framework.common.delayed_evaluator import DelayedEvaluator
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.parser.blob_loader import BlobLoader
-from superlinked.framework.common.parser.exception import InvalidMappingException
 from superlinked.framework.common.parser.parsed_schema import (
     ParsedSchema,
     ParsedSchemaField,
 )
 from superlinked.framework.common.schema.blob_information import BlobInformation
 from superlinked.framework.common.schema.event_schema_object import EventSchemaObject
-from superlinked.framework.common.schema.exception import SchemaMismatchException
-from superlinked.framework.common.schema.id_schema_object import (
-    IdSchemaObject,
-    IdSchemaObjectT,
-)
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.schema.schema_object import SFT, Blob, SchemaField
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.source.types import SourceTypeT
 
 
-class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
+class DataParser(ABC, Generic[SourceTypeT]):
     """
     A DataParser describes the interface to get a source data to the format of a defined schema with mapping support.
 
@@ -46,7 +43,7 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
             as `SchemaField`-`str` pairs such as `{movie_schema.title: "movie_title"}`.
     """
 
-    def __init__(self, schema: IdSchemaObjectT, mapping: Mapping[SchemaField, str] | None = None) -> None:
+    def __init__(self, schema: IdSchemaObject, mapping: Mapping[SchemaField, str] | None = None) -> None:
         """
         Initialize DataParser
 
@@ -54,15 +51,15 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
         that can be extended by DataParser realizations.
 
         Args:
-            schema (IdSchemaObjectT): SchemaObject describing the desired output.
+            schema (IdSchemaObject): IdSchemaObject describing the desired output.
             mapping (Mapping[SchemaField, str], optional): Realizations can use the `SchemaField` to `str` mapping
                 to define their custom mapping logic.
 
         Raises:
-            InitializationException: Parameter `schema` is of invalid type.
+            InvalidInputException: Parameter `schema` is of invalid type.
         """
         if not isinstance(schema, IdSchemaObject):
-            raise InitializationException(f"Parameter `schema` is of invalid type: {schema.__class__.__name__}")
+            raise InvalidInputException(f"Parameter `schema` is of invalid type: {schema.__class__.__name__}")
         self._is_event_data_parser = isinstance(schema, EventSchemaObject)
         mapping = mapping or {}
         self.__validate_mapping_against_schema(schema, mapping)
@@ -71,18 +68,10 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
         self._id_name = self._get_path(self._schema.id)
         if self._is_event_data_parser:
             self._created_at_name = self._get_path(cast(EventSchemaObject, schema).created_at)
-        self.__allow_bytes_input = True
-
-    @property
-    def blob_loader(self) -> BlobLoader:
-        return BlobLoader(allow_bytes=self.allow_bytes_input)
-
-    @property
-    def allow_bytes_input(self) -> bool:
-        return self.__allow_bytes_input
-
-    def set_allow_bytes_input(self, value: bool) -> None:
-        self.__allow_bytes_input = value
+        blob_loader = BlobLoader()
+        self._delayed_blob_loader = DelayedEvaluator(
+            delay_ms=settings.BATCHED_BLOB_LOAD_WAIT_TIME_MS, eval_fn=blob_loader.load, task_name="blob load"
+        )
 
     @classmethod
     def _is_id_value_valid(cls, value_to_check: str | float | int | None) -> bool:
@@ -94,63 +83,34 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
         Returns:
             True if the id value is valid
         """
-
         if value_to_check is None:
             return False
-
         if not isinstance(value_to_check, (str, int, float)):
-            raise TypeError(
-                (
-                    f"Param value_to_check should be instance of str, int, float, got {value_to_check} ",
-                    f"of type {type(value_to_check)}",
-                )
-            )
-
+            return False
         if isinstance(value_to_check, str) and value_to_check.strip() == "":
             return False
-
         if isinstance(value_to_check, (int, float)) and not isfinite(value_to_check):
             return False
-
         return True
 
     @classmethod
     def _is_created_at_value_valid(cls, value_to_check: int | None) -> bool:
-        """Function to check if value is
-        not missing (NaN, infinity, None or empty)
-
-        Args:
-            value_to_check: created at value to validate
-
-        Returns:
-            True if the created_at value is valid
-        """
-
-        if value_to_check is None:
-            return False
-        if not isinstance(value_to_check, int):
-            raise TypeError(
-                (
-                    f"Param value_to_check should be instance of int {value_to_check} ",
-                    f"of type {type(value_to_check)}",
-                )
-            )
-        return True
+        return isinstance(value_to_check, int)
 
     @abstractmethod
-    def unmarshal(self, data: SourceTypeT) -> list[ParsedSchema]:
+    async def unmarshal(self, data: Sequence[SourceTypeT]) -> list[ParsedSchema]:
         """
         Get the source data and parse it to the desired Schema with the defined mapping.
 
         Args:
-            data (TSourceType): Source data that corresponds to the DataParser's type.
+            data (Sequence[TSourceType]): Source data that corresponds to the DataParser's type.
 
         Returns:
             list[ParsedSchema]: A list of ParsedSchema objects.
         """
 
     @abstractmethod
-    def _marshal(self, parsed_schemas: list[ParsedSchema]) -> list[SourceTypeT]:
+    def _marshal(self, parsed_schemas: Sequence[ParsedSchema]) -> list[SourceTypeT]:
         pass
 
     def marshal(
@@ -174,13 +134,13 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
     def _get_path(self, field: SchemaField[SFT]) -> str:
         return self.mapping.get(field, field.name)
 
-    def __validate_mapping_against_schema(self, schema: IdSchemaObjectT, mapping: Mapping[SchemaField, str]) -> None:
+    def __validate_mapping_against_schema(self, schema: IdSchemaObject, mapping: Mapping[SchemaField, str]) -> None:
         schema_fields = list(schema.schema_fields) + [schema.id]
         if self._is_event_data_parser:
             schema_fields.append(cast(EventSchemaObject, schema).created_at)
         if invalid_keys := [key for key in mapping.keys() if key not in schema_fields]:
             invalid_key_names = [f"{key.schema_obj._base_class_name}.{key.name}" for key in invalid_keys]
-            raise InvalidMappingException(f"{invalid_key_names} don't belong to the {schema._base_class_name} schema.")
+            raise InvalidInputException(f"{invalid_key_names} don't belong to the {schema._base_class_name} schema.")
 
     def _handle_parsed_schema_fields(
         self, parsed_schema_fields: Sequence[ParsedSchemaField]
@@ -194,15 +154,13 @@ class DataParser(ABC, Generic[IdSchemaObjectT, SourceTypeT]):
             parsed_field = ParsedSchemaField(parsed_field.schema_field, parsed_field.value.original)
         return parsed_field
 
-    def __check_parsed_schemas(self, parsed_schemas: list[ParsedSchema]) -> None:
-        if not_valid_schema_base_class_names := [
+    def __check_parsed_schemas(self, parsed_schemas: Sequence[ParsedSchema]) -> None:
+        if not_valid_schema_base_class_names := {
             parsed_schema.schema._base_class_name
             for parsed_schema in parsed_schemas
             if parsed_schema.schema != self._schema
-        ]:
-            raise SchemaMismatchException(
-                (
-                    f"{self.__class__.__name__} can only marshal {self._schema._base_class_name}, ",
-                    f"got {not_valid_schema_base_class_names}",
-                )
+        }:
+            raise InvalidInputException(
+                f"{type(self).__name__} can only marshal {self._schema._base_class_name}, "
+                f"got {list(not_valid_schema_base_class_names)}"
             )

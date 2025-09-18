@@ -19,13 +19,11 @@ import sys
 from types import ModuleType
 
 import structlog
-from beartype.typing import Sequence, TypeVar
+from beartype.typing import Sequence
 
-from superlinked.framework.common.exception import RecursionException
+from superlinked.framework.common.exception import InvalidInputException
 
 logger = structlog.getLogger()
-
-BaseClassT = TypeVar("BaseClassT")
 
 
 class ClassHelper:
@@ -47,7 +45,7 @@ class ClassHelper:
         ignore_missing_modules: Sequence[str] | None = None,
     ) -> ModuleType:
         if depth > ClassHelper.MAX_MODULE_DEPTH:
-            raise RecursionException(f"Module import depth limit ({ClassHelper.MAX_MODULE_DEPTH}) exceeded.")
+            raise InvalidInputException(f"Module import depth limit ({ClassHelper.MAX_MODULE_DEPTH}) exceeded.")
         base_module: ModuleType = ClassHelper._import_module(base_module_name)
         if recursive and hasattr(base_module, "__path__"):
             for _, modname, is_pkg in pkgutil.walk_packages(base_module.__path__):

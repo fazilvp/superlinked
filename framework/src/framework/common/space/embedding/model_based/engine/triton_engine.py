@@ -22,7 +22,7 @@ from beartype.typing import Sequence
 from typing_extensions import override
 
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInputT,
+    ModelEmbeddingInput,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine import (
     EmbeddingEngine,
@@ -105,7 +105,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             raise
 
     @override
-    async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
+    async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         """
         Generate embeddings using Triton Inference Server with batch processing.
         

@@ -20,11 +20,11 @@ from beartype.typing import Sequence
 from typing_extensions import override
 
 from superlinked.framework.common.dag.embedding_node import EmbeddingNode
-from superlinked.framework.common.dag.named_function_node import NamedFunctionNode
 from superlinked.framework.common.dag.period_time import PeriodTime
 from superlinked.framework.common.dag.recency_node import RecencyNode
 from superlinked.framework.common.dag.schema_field_node import SchemaFieldNode
-from superlinked.framework.common.schema.schema_object import SchemaObject, Timestamp
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
+from superlinked.framework.common.schema.schema_object import Timestamp
 from superlinked.framework.common.space.config.aggregation.aggregation_config import (
     AggregationConfig,
     AvgAggregationConfig,
@@ -40,7 +40,6 @@ from superlinked.framework.common.space.config.normalization.normalization_confi
 from superlinked.framework.common.space.config.transformation_config import (
     TransformationConfig,
 )
-from superlinked.framework.common.util.named_function_evaluator import NamedFunction
 from superlinked.framework.dsl.space.has_space_field_set import HasSpaceFieldSet
 from superlinked.framework.dsl.space.input_aggregation_mode import InputAggregationMode
 from superlinked.framework.dsl.space.space import Space
@@ -67,18 +66,6 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
     You can think of the value of negative_filter as it offsets that amount of similarity stemming from other
     spaces in the index. For example setting it -1 would offset any text similarity that has weight 1 - effectively
     filtering out all old items however similar they are in terms of their text.
-
-    Attributes:
-        timestamp (SpaceFieldSet): A set of Timestamp objects. The actual data is expected to be unix timestamps
-            in seconds.
-            It is a SchemaFieldObject not regular python ints or floats.
-        time_period_hour_offset (timedelta): Starting period time will be set to this hour.
-            Day will be the next day of context.now(). Defaults to timedelta(hours=0).
-        period_time_list (list[PeriodTime] | None): A list of period time parameters.
-            Weights default to 1. Period time to 14 days.
-        aggregation_mode (InputAggregationMode): The  aggregation mode of the number embedding.
-            Possible values are: maximum, minimum and average. Defaults to InputAggregationMode.INPUT_AVERAGE.
-        negative_filter (float): The recency score of items that are older than the oldest period time. Defaults to 0.0.
     """
 
     def __init__(
@@ -88,6 +75,7 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
         period_time_list: list[PeriodTime] | PeriodTime | None = None,
         aggregation_mode: InputAggregationMode = InputAggregationMode.INPUT_AVERAGE,
         negative_filter: float = 0.0,
+        salt: str | None = None,
     ) -> None:
         """
         Initialize the RecencySpace.
@@ -104,9 +92,11 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
                 Possible values are: maximum, minimum and average. Defaults to InputAggregationMode.INPUT_AVERAGE.
             negative_filter (float): The recency score of items that are older than the oldest period time.
                 Defaults to 0.0.
+            salt: (str | None, optional): Enables the creation of identical spaces to allow
+                different weighted event definitions with them.
         """
         non_none_timestamp = self._fields_to_non_none_sequence(timestamp)
-        super().__init__(non_none_timestamp, Timestamp)
+        super().__init__(non_none_timestamp, Timestamp, salt)
         self._aggregation_config_type_by_mode = self.__init_aggregation_config_type_by_mode()
         self.timestamp = SpaceFieldSet[int](self, set(non_none_timestamp))
         recency_periods: list[PeriodTime] = (
@@ -124,11 +114,12 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
         self._transformation_config = self._init_transformation_config(
             self._embedding_config, self._aggregation_mode, recency_periods
         )
-        self._schema_node_map: dict[SchemaObject, EmbeddingNode[int, int]] = {
+        self._schema_node_map: dict[IdSchemaObject, EmbeddingNode[int, int]] = {
             field.schema_obj: RecencyNode(
                 parent=SchemaFieldNode(field),
                 transformation_config=self._transformation_config,
                 fields_for_identification=self.timestamp.fields,
+                salt=salt,
             )
             for field in self.timestamp.fields
         }
@@ -160,7 +151,7 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
     @override
     def _embedding_node_by_schema(
         self,
-    ) -> dict[SchemaObject, EmbeddingNode[int, int]]:
+    ) -> dict[IdSchemaObject, EmbeddingNode[int, int]]:
         return self._schema_node_map
 
     @property
@@ -206,11 +197,5 @@ class RecencySpace(Space[int, int], HasSpaceFieldSet):  # pylint: disable=too-ma
         )
 
     @override
-    def _create_default_node(self, schema: SchemaObject) -> EmbeddingNode[int, int]:
-        named_function_node = NamedFunctionNode(NamedFunction.NOW, schema, int)
-        default_node = RecencyNode(
-            parent=named_function_node,
-            transformation_config=self._transformation_config,
-            fields_for_identification=self.timestamp.fields,
-        )
-        return default_node
+    def _create_default_node(self, schema: IdSchemaObject) -> EmbeddingNode[int, int]:
+        return RecencyNode(None, self._transformation_config, self.timestamp.fields, schema)

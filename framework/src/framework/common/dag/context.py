@@ -17,15 +17,15 @@ from __future__ import annotations
 from collections import defaultdict
 from enum import Enum, auto
 
-from beartype.typing import Mapping, TypeVar, cast
-from typing_extensions import Self, TypeAlias
+from beartype.typing import Mapping, TypeAlias, TypeVar, cast
+from typing_extensions import Self
 
 from superlinked.framework.common.const import constants
 from superlinked.framework.common.exception import (
-    NotImplementedException,
-    QueryException,
+    InvalidInputException,
+    InvalidStateException,
 )
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.util import time_util
 from superlinked.framework.common.visualize.ingestion_output_recorder import (
     IngestionOutputRecorder,
@@ -41,9 +41,7 @@ from superlinked.framework.common.visualize.query_output_recorder import (
 ContextValue: TypeAlias = int | float | str | Mapping | list | bool | None
 T = TypeVar("T", bound=ContextValue)
 CONTEXT_COMMON = "common"
-CONTEXT_COMMON_ENVIRONMENT = "environment"
 CONTEXT_COMMON_NOW = "now"
-LOAD_DEFAULT_NODE_INPUT = "load_default_node_input"
 SPACE_WEIGHT_PARAM_NAME = "weight"
 
 
@@ -88,17 +86,16 @@ class ExecutionContext:
             case NowStrategy.CONTEXT_TIME:
                 now = self.__data_now()
                 if now is None:
-                    raise QueryException(
-                        (
-                            f"Environment's '{CONTEXT_COMMON}.{CONTEXT_COMMON_NOW}' "
-                            + "property should always be initialized for query contexts",
-                        )
+                    raise InvalidStateException(
+                        f"Environment's '{CONTEXT_COMMON}.{CONTEXT_COMMON_NOW}' "
+                        "property should always be initialized for query contexts "
+                        f"while using {NowStrategy.CONTEXT_TIME.name} now strategy"
                     )
                 return now
             case NowStrategy.SYSTEM_TIME:
                 return time_util.now()
             case _:
-                raise NotImplementedException(f"Unknown now strategy: {self.now_strategy}")
+                raise InvalidInputException(f"Unknown now strategy: {self.now_strategy}")
 
     @property
     def environment(self) -> ExecutionEnvironment:
@@ -150,7 +147,7 @@ class ExecutionContext:
         return self.__data[node_id]
 
     def __init_output_recorder(self) -> OutputRecorder:
-        if not Settings().ENABLE_DAG_VISUALIZATION:
+        if not settings.ENABLE_DAG_VISUALIZATION:
             return NoOpOutputRecorder()
         if self.is_query_context:
             return QueryOutputRecorder()

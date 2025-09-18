@@ -16,10 +16,9 @@
 from beartype.typing import Any, Sequence
 from pydantic import BaseModel
 
-from superlinked.framework.common.exception import QueryException
+from superlinked.framework.common.exception import UnexpectedResponseException
 from superlinked.framework.common.nlq.open_ai import OpenAIClient, OpenAIClientConfig
-from superlinked.framework.common.util.async_util import AsyncUtil
-from superlinked.framework.common.util.execution_timer import time_execution
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 from superlinked.framework.dsl.query.nlq.nlq_clause_collector import NLQClauseCollector
 from superlinked.framework.dsl.query.nlq.param_filler.query_param_model_builder import (
     QueryParamModelBuilder,
@@ -27,21 +26,12 @@ from superlinked.framework.dsl.query.nlq.param_filler.query_param_model_builder 
 from superlinked.framework.dsl.query.nlq.param_filler.query_param_prompt_builder import (
     QueryParamPromptBuilder,
 )
-from superlinked.framework.dsl.query.nlq.suggestion.query_suggestion_model import (
-    QuerySuggestionsModel,
-)
-from superlinked.framework.dsl.query.nlq.suggestion.query_suggestions_prompt_builder import (
-    QuerySuggestionsPromptBuilder,
-)
 from superlinked.framework.dsl.query.query_clause.query_clause import QueryClause
 from superlinked.framework.dsl.query.space_weight_param_info import SpaceWeightParamInfo
 
 
 class NLQHandler:
-    def __init__(
-        self,
-        client_config: OpenAIClientConfig,
-    ) -> None:
+    def __init__(self, client_config: OpenAIClientConfig) -> None:
         self.__client_config = client_config
 
     async def fill_params(
@@ -56,39 +46,19 @@ class NLQHandler:
             return {}
         model_class = QueryParamModelBuilder.build(clause_collector)
         instructor_prompt = QueryParamPromptBuilder.calculate_instructor_prompt(clause_collector, system_prompt)
-        return await self._execute_query(natural_query, instructor_prompt, model_class)
+        with telemetry.span(
+            "nlq.execute",
+            attributes={
+                "n_clauses": len(clauses),
+                "model_class": model_class.__name__,
+            },
+        ):
+            return await self._execute_query(natural_query, instructor_prompt, model_class)
 
-    def suggest_improvements(
-        self,
-        clauses: Sequence[QueryClause],
-        space_weight_param_info: SpaceWeightParamInfo,
-        natural_query: str | None,
-        feedback: str | None,
-        system_prompt: str | None = None,
-    ) -> QuerySuggestionsModel:
-        clause_collector = NLQClauseCollector(clauses, space_weight_param_info)
-        if clause_collector.all_params_have_value_set:
-            return QuerySuggestionsModel()
-        instructor_prompt = QuerySuggestionsPromptBuilder.calculate_instructor_prompt(
-            clause_collector,
-            system_prompt,
-            feedback,
-            natural_query,
-        )
-        result = AsyncUtil.run(
-            self._execute_query(
-                "Analyze the parameter definitions and provide specific improvements.",
-                instructor_prompt,
-                QuerySuggestionsModel,
-            )
-        )
-        return QuerySuggestionsModel(**result)
-
-    @time_execution
     async def _execute_query(self, query: str, instructor_prompt: str, model_class: type[BaseModel]) -> dict[str, Any]:
         try:
             client = OpenAIClient(self.__client_config)
             result = await client.query(query, instructor_prompt, model_class)
             return result
         except Exception as e:
-            raise QueryException(f"Error executing natural language query: {str(e)}") from e
+            raise UnexpectedResponseException(f"Error executing natural language query: {str(e)}") from e

@@ -18,11 +18,13 @@ from beartype.typing import Any, Generic, Sequence, TypeVar
 
 from superlinked.framework.common.calculation.distance_metric import DistanceMetric
 from superlinked.framework.common.const import constants
-from superlinked.framework.common.exception import InitializationException
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.precision import Precision
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.storage.entity.entity import Entity
 from superlinked.framework.common.storage.entity.entity_data import EntityData
+from superlinked.framework.common.storage.entity.entity_id import EntityId
+from superlinked.framework.common.storage.entity.entity_merger import EntityMerger
 from superlinked.framework.common.storage.index_config import IndexConfig
 from superlinked.framework.common.storage.query.vdb_knn_search_config import (
     VDBKNNSearchConfig,
@@ -37,7 +39,10 @@ from superlinked.framework.common.storage.search_index.manager.search_index_mana
 from superlinked.framework.common.storage.search_index.search_algorithm import (
     SearchAlgorithm,
 )
-from superlinked.framework.common.util.execution_timer import time_execution
+from superlinked.framework.common.telemetry.telemetry_registry import (
+    TelemetryAttributeType,
+    telemetry,
+)
 from superlinked.framework.dsl.query.query_user_config import QueryUserConfig
 from superlinked.framework.storage.common.vdb_settings import VDBSettings
 from superlinked.framework.storage.in_memory.object_serializer import ObjectSerializer
@@ -51,7 +56,7 @@ class VDBConnector(ABC, Generic[VDBKNNSearchConfigT]):
         self._index_configs: dict[str, IndexConfig] = {
             index_config.index_name: index_config for index_config in (index_configs or [])
         }
-        self._app_id = Settings().APP_ID
+        self._app_id = settings.APP_ID
 
     @property
     def distance_metric(self) -> DistanceMetric:
@@ -72,8 +77,8 @@ class VDBConnector(ABC, Generic[VDBKNNSearchConfigT]):
     @property
     def collection_name(self) -> str:
         if self._app_id is None:
-            raise InitializationException(
-                "app id wasn't initialized properly by calling "
+            raise InvalidStateException(
+                "app id wasn't initialized properly "
                 + "by either initializing the vdb connector with a set of index configs "
                 + "or calling init_search_index_configs with them."
             )
@@ -111,15 +116,33 @@ class VDBConnector(ABC, Generic[VDBKNNSearchConfigT]):
             override_existing,
         )
 
-    @abstractmethod
     async def write_entities(self, entity_data: Sequence[EntityData]) -> None:
+        labels: dict[str, TelemetryAttributeType] = {
+            "entity_data_count": len(entity_data),
+            "vdb_type": type(self).__name__,
+        }
+        telemetry.record_metric("vdb.write.count", 1, labels)
+        unique_entity_data_items = EntityMerger.get_unique_entities(entity_data)
+        return await self._write_entities(unique_entity_data_items)
+
+    async def read_entities(self, entities: Sequence[Entity]) -> list[EntityData]:
+        labels: dict[str, TelemetryAttributeType] = {"entity_count": len(entities), "vdb_type": type(self).__name__}
+        telemetry.record_metric("vdb.read.count", 1, labels)
+        unique_entities = EntityMerger.get_unique_entities(entities)
+        unique_entity_data = await self._read_entities(unique_entities)
+        entity_data_map: dict[EntityId, EntityData] = {
+            entity_data.id_: entity_data for entity_data in unique_entity_data
+        }
+        return EntityMerger.build_entity_data_for_original_entities(entities, entity_data_map)
+
+    @abstractmethod
+    async def _write_entities(self, entity_data: Sequence[EntityData]) -> None:
         pass
 
     @abstractmethod
-    async def read_entities(self, entities: Sequence[Entity]) -> Sequence[EntityData]:
+    async def _read_entities(self, entities: Sequence[Entity]) -> list[EntityData]:
         pass
 
-    @time_execution
     async def knn_search(
         self,
         index_name: str,
@@ -141,6 +164,16 @@ class VDBConnector(ABC, Generic[VDBKNNSearchConfigT]):
             filters=vdb_knn_search_params.filters,
             radius=vdb_knn_search_params.radius,
         )
+        labels = {
+            "index_name": index_name,
+            "schema_name": schema_name,
+            "distance_metric": self.distance_metric.value,
+            "search_algorithm": self.search_algorithm.value,
+            "vector_precision": self.vector_precision.value,
+            "limit": search_params.limit,
+            "radius": search_params.radius,
+        }
+        telemetry.record_metric("vdb.knn.count", 1, labels)
         return await self._knn_search(index_name, schema_name, search_params, search_config, **params)
 
     @abstractmethod

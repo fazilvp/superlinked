@@ -21,6 +21,7 @@ from superlinked.framework.common.calculation.vector_similarity import (
     VectorSimilarityCalculator,
 )
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.interface.comparison_operand import (
     ComparisonOperation,
 )
@@ -31,10 +32,6 @@ from superlinked.framework.common.storage.query.vdb_knn_search_params import (
     VDBKNNSearchParams,
 )
 from superlinked.framework.common.storage.search import Search
-from superlinked.framework.storage.in_memory.exception import (
-    VectorFieldDimensionException,
-    VectorFieldTypeException,
-)
 
 # This is associated with the DEFAULT_LIMIT from superlinked.framework.common.const
 UNLIMITED_SEARCH_RESULTS = -1
@@ -100,12 +97,12 @@ class InMemorySearch:
         if wrong_types := {
             type(value) for value in filtered_unchecked_vectors.values() if not isinstance(value, Vector)
         }:
-            raise VectorFieldTypeException(f"Indexed vector field contains non-vectors: {wrong_types}")
+            raise InvalidStateException("Indexed vector field contains non-vectors.", wrong_types=wrong_types)
         if wrong_dimensions := {
             value.dimension for value in filtered_unchecked_vectors.values() if value.dimension != vector.dimension
         }:
-            raise VectorFieldDimensionException(
-                f"Indexed vector field contains vectors with wrong dimensions: {wrong_dimensions}"
+            raise InvalidStateException(
+                "Indexed vector field contains vectors with wrong dimensions.", wrong_dimensions=wrong_dimensions
             )
         return cast(dict[str, Vector], filtered_unchecked_vectors)
 
@@ -130,8 +127,7 @@ class InMemorySearch:
             {
                 k: similarity for k, similarity in similarities.items() if not radius or similarity >= (1 - radius)
             }.items(),
-            key=lambda x: x[1],
-            reverse=True,
+            key=lambda x: (-x[1], x[0]),
         )
 
     @staticmethod

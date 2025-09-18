@@ -15,7 +15,8 @@
 
 from beartype.typing import Any, Sequence
 
-from superlinked.framework.common.exception import QueryException
+from superlinked.framework.common.exception import InvalidInputException
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 from superlinked.framework.common.util.async_util import AsyncUtil
 from superlinked.framework.common.util.type_validator import TypeValidator
 from superlinked.framework.dsl.executor.query.query_executor import QueryExecutor
@@ -68,9 +69,13 @@ class QueryMixin:
             Result: The result of the query execution.
 
         Raises:
-            QueryException: If the query index is not found among the executor's indices.
+            InvalidInputException: If the query index is not found among the executor's indices.
         """
-        return AsyncUtil.run(self.async_query(query_descriptor, **params))
+        with telemetry.span(
+            "executor.query",
+            attributes={"index_id": query_descriptor.index._node_id, "schema": query_descriptor.schema._schema_name},
+        ):
+            return AsyncUtil.run(self.async_query(query_descriptor, **params))
 
     async def async_query(self, query_descriptor: QueryDescriptor, **params: Any) -> QueryResult:
         if query_vector_factory := self._query_vector_factory_by_index.get(query_descriptor.index):
@@ -80,7 +85,7 @@ class QueryMixin:
             ).query(**params)
             return self._query_result_converter.convert(query_result)
 
-        raise QueryException(
+        raise InvalidInputException(
             (
                 f"Query index {query_descriptor.index} is not amongst the executor's indices: ",
                 f" {list(self._query_vector_factory_by_index.keys())}",

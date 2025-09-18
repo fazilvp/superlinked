@@ -17,30 +17,23 @@ from __future__ import annotations
 from beartype.typing import Generic, Sequence, cast
 from typing_extensions import override
 
-from superlinked.framework.common.exception import InitializationException
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.parser.data_parser import DataParser
 from superlinked.framework.common.parser.json_parser import JsonParser
-from superlinked.framework.common.schema.id_schema_object import (
-    IdSchemaObject,
-    IdSchemaObjectT,
-)
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.source.types import SourceTypeT
 from superlinked.framework.common.util.type_validator import TypeValidator
 from superlinked.framework.online.source.online_source import OnlineSource
 
 
-class InteractiveSource(OnlineSource[IdSchemaObjectT, SourceTypeT], Generic[IdSchemaObjectT, SourceTypeT]):
+class InteractiveSource(OnlineSource[SourceTypeT], Generic[SourceTypeT]):
     """
     InteractiveSource represents a source of data, where you can put your data. This will supply
     the index with the data it needs to index and search in.
     """
 
     @TypeValidator.wrap
-    def __init__(
-        self,
-        schema: IdSchemaObjectT,
-        parser: DataParser[IdSchemaObjectT, SourceTypeT] | None = None,
-    ) -> None:
+    def __init__(self, schema: IdSchemaObject, parser: DataParser[SourceTypeT] | None = None) -> None:
         """
         Initialize the InteractiveSource.
 
@@ -49,15 +42,12 @@ class InteractiveSource(OnlineSource[IdSchemaObjectT, SourceTypeT], Generic[IdSc
             parser (DataParser | None, optional): The data parser. Defaults to JsonParser if None is supplied.
 
         Raises:
-            InitializationException: If the schema is not an instance of SchemaObject.
+            InvalidInputException: If the schema is not an instance of SchemaObject.
         """
         if not isinstance(schema, IdSchemaObject):
-            raise InitializationException(f"Parameter `schema` is of invalid type: {schema.__class__.__name__}")
+            raise InvalidInputException(f"Parameter `schema` is of invalid type: {schema.__class__.__name__}")
 
-        super().__init__(
-            schema,
-            cast(DataParser[IdSchemaObjectT, SourceTypeT], parser or JsonParser(schema)),
-        )
+        super().__init__(schema, cast(DataParser[SourceTypeT], parser or JsonParser(schema)))
         self.__can_accept_data = False
 
     def allow_data_ingestion(self) -> None:
@@ -74,7 +64,7 @@ class InteractiveSource(OnlineSource[IdSchemaObjectT, SourceTypeT], Generic[IdSc
         """
         # Calls the parent, override is only necessary for adding the docstring.
         if not self.__can_accept_data:
-            raise InitializationException(
+            raise InvalidInputException(
                 "Data ingestion is not allowed until executor.run() has been executed. "
                 "Please ensure the executor is running before attempting to ingest data."
             )

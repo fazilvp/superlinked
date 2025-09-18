@@ -14,7 +14,4 @@
 
 from __future__ import annotations
 
-from beartype.typing import TypeVar
-from PIL.Image import Image as PILImage
-
-ModelEmbeddingInputT = TypeVar("ModelEmbeddingInputT", bound=str | PILImage)
+ModelEmbeddingInput = str | bytes

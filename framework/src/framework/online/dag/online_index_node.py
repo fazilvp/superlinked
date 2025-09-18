@@ -18,16 +18,18 @@ from beartype.typing import Sequence, cast
 from typing_extensions import override
 
 from superlinked.framework.common.dag.context import ExecutionContext
-from superlinked.framework.common.dag.exception import ParentCountException
 from superlinked.framework.common.dag.index_node import IndexNode
 from superlinked.framework.common.dag.node import Node
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.interface.has_length import HasLength
 from superlinked.framework.common.parser.parsed_schema import ParsedSchema
-from superlinked.framework.common.schema.schema_object import SchemaObject
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
-from superlinked.framework.online.dag.evaluation_result import EvaluationResult
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
+from superlinked.framework.online.dag.evaluation_result import (
+    EvaluationResult,
+)
 from superlinked.framework.online.dag.online_node import OnlineNode
+from superlinked.framework.online.online_entity_cache import OnlineEntityCache
 
 
 class OnlineIndexNode(OnlineNode[IndexNode, Vector], HasLength):
@@ -35,42 +37,43 @@ class OnlineIndexNode(OnlineNode[IndexNode, Vector], HasLength):
         self,
         node: IndexNode,
         parents: Sequence[OnlineNode[Node[Vector], Vector]],
-        storage_manager: StorageManager,
     ) -> None:
-        super().__init__(node, parents, storage_manager)
+        super().__init__(node, parents)
 
     @property
     def length(self) -> int:
         return self.node.length
 
-    def get_parent_for_schema(self, schema: SchemaObject) -> OnlineNode:
+    def get_parent_for_schema(self, schema: IdSchemaObject) -> OnlineNode:
         active_parents = [parent for parent in self.parents if schema in cast(Node, parent.node).schemas]
         if len(active_parents) != 1:
-            raise ParentCountException(
-                f"{self.class_name} must have exactly 1 parent per schema, got {len(active_parents)}"
+            raise InvalidStateException(
+                "Online index node must have exactly 1 parent per schema.", len_active_parents=len(active_parents)
             )
         return active_parents[0]
 
     def __get_parent_for_parsed_schemas(self, parsed_schemas: Sequence[ParsedSchema]) -> OnlineNode:
-        active_parents = set(self.get_parent_for_schema(parsed_schema.schema) for parsed_schema in parsed_schemas)
+        active_parents = {self.get_parent_for_schema(parsed_schema.schema) for parsed_schema in parsed_schemas}
         if len(active_parents) != 1:
-            raise ParentCountException(
-                f"{self.class_name} must have exactly 1 parent per schema, got {len(active_parents)}"
+            raise InvalidStateException(
+                "Online index node must have exactly 1 parent per schema.", len_active_parents=len(active_parents)
             )
         return cast(OnlineNode[Node[Vector], Vector], next(iter(active_parents)))
 
     @override
-    def evaluate_self(
+    async def evaluate_self(
         self,
         parsed_schemas: Sequence[ParsedSchema],
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[EvaluationResult[Vector] | None]:
         parent: OnlineNode = self.__get_parent_for_parsed_schemas(parsed_schemas)
-        parent_results = cast(list[EvaluationResult], self.evaluate_parent(parent, parsed_schemas, context))
-        return [
-            EvaluationResult(
-                self._get_single_evaluation_result(parent_result.main.value),
-                [self._get_single_evaluation_result(chunk_result.value) for chunk_result in parent_result.chunks],
-            )
-            for parent_result in parent_results
-        ]
+        parent_results = await self.evaluate_parent(parent, parsed_schemas, context, online_entity_cache)
+        return [self._transform_result(parent_result) for parent_result in parent_results]
+
+    def _transform_result(self, parent_result: EvaluationResult[Vector] | None) -> EvaluationResult[Vector] | None:
+        if parent_result is None:
+            return None
+        return self._wrap_in_evaluation_result(
+            parent_result.main.value, [chunk_result.value for chunk_result in parent_result.chunks]
+        )

@@ -23,8 +23,8 @@ from superlinked.framework.common.dag.resolved_schema_reference import (
     ResolvedSchemaReference,
 )
 from superlinked.framework.common.exception import (
-    InitializationException,
-    InvalidSchemaException,
+    InvalidInputException,
+    InvalidStateException,
 )
 from superlinked.framework.common.schema.event_schema_object import (
     EventSchemaObject,
@@ -32,7 +32,6 @@ from superlinked.framework.common.schema.event_schema_object import (
     SchemaReference,
 )
 from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
-from superlinked.framework.common.schema.schema_object import SchemaObject
 from superlinked.framework.common.space.config.aggregation.aggregation_config import (
     AggregationInputT,
 )
@@ -58,7 +57,7 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
         )
 
     @classmethod
-    def from_base_effect(cls, base_effect: Effect, schemas: set[SchemaObject]) -> EffectWithReferencedSchemaObject:
+    def from_base_effect(cls, base_effect: Effect, schemas: set[IdSchemaObject]) -> EffectWithReferencedSchemaObject:
         (
             resolved_affected_schema_reference,
             resolved_affecting_schema_reference,
@@ -76,7 +75,7 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
 
     @staticmethod
     def _init_resolved_schema_reference_fields(
-        effect: Effect, schemas: set[SchemaObject]
+        effect: Effect, schemas: set[IdSchemaObject]
     ) -> tuple[ResolvedSchemaReference, ResolvedSchemaReference]:
         resolved_affected_schema_reference = EffectWithReferencedSchemaObject._get_resolved_schema_reference(
             effect.affected_schema_reference, schemas
@@ -96,11 +95,11 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
             resolved_affected_schema_reference.reference_field.schema_obj
             != resolved_affecting_schema_reference.reference_field.schema_obj
         ):
-            raise InitializationException(
-                "An Effect's affected and affecting schema reference must come "
-                + "from the same EventSchema, got "
-                + f"{resolved_affected_schema_reference.reference_field.schema_obj._schema_name} and "
-                + f"{resolved_affecting_schema_reference.reference_field.schema_obj._schema_name}."
+
+            raise InvalidStateException(
+                "An Effect's affected and affecting schema reference must come from the same EventSchema.",
+                affected_reference_schema=resolved_affected_schema_reference.reference_field.schema_obj._schema_name,
+                affecting_reference_schema=resolved_affecting_schema_reference.reference_field.schema_obj._schema_name,
             )
         return cast(
             EventSchemaObject,
@@ -110,7 +109,7 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
     @staticmethod
     def _get_resolved_schema_reference(
         unchecked_schema_reference: SchemaReference | MultipliedSchemaReference,
-        schemas: set[SchemaObject],
+        schemas: set[IdSchemaObject],
     ) -> ResolvedSchemaReference:
         (
             schema_reference,
@@ -134,12 +133,12 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
         )
         multiplier = unchecked_schema_reference.multiplier
         if multiplier == 0:
-            raise InitializationException("SchemaReference cannot have 0 (zero) as its multiplier.")
+            raise InvalidInputException("SchemaReference cannot have 0 (zero) as its multiplier.")
         return (result_schema_reference, multiplier)
 
     @staticmethod
     def _get_schema_object_for_reference(
-        schema_reference: SchemaReference, schemas: set[SchemaObject]
+        schema_reference: SchemaReference, schemas: set[IdSchemaObject]
     ) -> IdSchemaObject:
         schema_ = next(
             (schema_ for schema_ in schemas if isinstance(schema_, schema_reference._referenced_schema)),
@@ -147,7 +146,7 @@ class EffectWithReferencedSchemaObject(Generic[AggregationInputT, EmbeddingInput
         )
         if schema_ is None:
             schemas_as_text = ", ".join(schema._schema_name for schema in schemas)
-            raise InvalidSchemaException(
+            raise InvalidInputException(
                 f"Referenced schema type `{schema_reference.name}` is"
                 + f" not present in the index schemas: {schemas_as_text}"
             )

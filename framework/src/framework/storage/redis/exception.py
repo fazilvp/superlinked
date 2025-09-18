@@ -13,20 +13,9 @@
 # limitations under the License.
 
 
-from superlinked.framework.common.const import constants
-
-
 class RedisTimeoutException(Exception):
-    """Exception raised when Redis operations timeout."""
-
-    def __init__(self, message: str | None = None):
-        if message is None:
-            message = f"Redis timeout ({constants.REDIS_TIMEOUT}ms) exceeded."
-        super().__init__(message)
+    pass
 
 
 class RedisResultException(Exception):
-    """Exception raised when Redis returns incomplete or invalid results."""
-
-    def __init__(self, message: str = "Redis returned incomplete or invalid results"):
-        super().__init__(message)
+    pass

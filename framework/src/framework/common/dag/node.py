@@ -23,7 +23,7 @@ from typing_extensions import Self
 from superlinked.framework.common.dag.dag_effect import DagEffect
 from superlinked.framework.common.dag.persistence_params import PersistenceParams
 from superlinked.framework.common.data_types import NodeDataTypes
-from superlinked.framework.common.schema.schema_object import SchemaObject
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.storage.persistence_type import PersistenceType
 from superlinked.framework.common.util.string_util import StringUtil
 
@@ -48,7 +48,7 @@ class Node(Generic[NodeDataT], ABC):  # pylint: disable=too-many-instance-attrib
         self,
         node_data_type: type[NodeDataT],
         parents: Sequence[Node],
-        schemas: set[SchemaObject] | None = None,
+        schemas: set[IdSchemaObject] | None = None,
         dag_effects: set[DagEffect] | None = None,
         persistence_params: PersistenceParams | None = None,
         non_nullable_parents: frozenset[Node] | None = None,
@@ -57,7 +57,7 @@ class Node(Generic[NodeDataT], ABC):  # pylint: disable=too-many-instance-attrib
         self._node_id: str | None = None
         self.children: list[Node] = []
         self.parents = parents
-        self.schemas: set[SchemaObject] = (schemas or set()).union(
+        self.schemas: set[IdSchemaObject] = (schemas or set()).union(
             {schema for parent in parents for schema in parent.schemas} if parents else set()
         )
         self.dag_effects: set[DagEffect] = (dag_effects or set()).union(
@@ -119,7 +119,7 @@ class Node(Generic[NodeDataT], ABC):  # pylint: disable=too-many-instance-attrib
         )
         return to_hash
 
-    def project_parents_to_schema(self, schema: SchemaObject) -> Sequence[Node]:
+    def project_parents_to_schema(self, schema: IdSchemaObject) -> Sequence[Node]:
         if schema in self.schemas:
             return [parent for parent in self.parents if schema in parent.schemas]
         return []
@@ -128,12 +128,3 @@ class Node(Generic[NodeDataT], ABC):  # pylint: disable=too-many-instance-attrib
         if dag_effect in self.dag_effects:
             return [parent for parent in self.parents if dag_effect in parent.dag_effects]
         return []
-
-    def find_ancestor(self, type_: type[Node]) -> Node[Any] | None:
-        queue = list(self.parents)
-        while queue:
-            parent = queue.pop(0)
-            if isinstance(parent, type_):
-                return parent
-            queue.extend(parent.parents)
-        return None

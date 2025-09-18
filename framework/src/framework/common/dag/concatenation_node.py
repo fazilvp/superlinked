@@ -18,33 +18,32 @@ from beartype.typing import Any, Sequence, cast
 from typing_extensions import override
 
 from superlinked.framework.common.dag.dag_effect import DagEffect
-from superlinked.framework.common.dag.exception import ParentCountException
 from superlinked.framework.common.dag.node import Node
 from superlinked.framework.common.dag.persistence_params import PersistenceParams
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.interface.has_length import HasLength
-from superlinked.framework.common.schema.schema_object import SchemaObject
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.space.config.normalization.normalization_config import (
     ConstantNormConfig,
 )
 
 
 class ConcatenationNode(Node[Vector], HasLength):
-    def __init__(self, parents: list[Node[Vector]]) -> None:
-        # Since events can change only a part of the whole result, we
-        # must persist the rest of the parts.
+    def __init__(self, parents: list[Node[Vector]], persist_parent_node_result: bool) -> None:
+        """Since events can change only a part of the whole result, we
+        must persist the rest of the parts, in case we use events in the index
+        """
+        persistence_params = PersistenceParams(persist_parent_node_result=persist_parent_node_result)
         super().__init__(
-            Vector,
-            parents,
-            persistence_params=PersistenceParams(persist_parent_node_result=True),
-            non_nullable_parents=frozenset(parents),
+            Vector, parents, persistence_params=persistence_params, non_nullable_parents=frozenset(parents)
         )
         self.__validate_parents()
         self.__length = sum(cast(HasLength, parent).length for parent in self.parents)
 
     def __validate_parents(self) -> None:
         if len(self.parents) == 0:
-            raise ParentCountException(f"{self.class_name} must have at least 1 parent.")
+            raise InvalidStateException(f"{self.class_name} must have at least 1 parent.")
 
     @property
     def length(self) -> int:
@@ -55,7 +54,7 @@ class ConcatenationNode(Node[Vector], HasLength):
         return {"class_name": type(self).__name__}
 
     @override
-    def project_parents_to_schema(self, schema: SchemaObject) -> Sequence[Node]:
+    def project_parents_to_schema(self, schema: IdSchemaObject) -> Sequence[Node]:
         if schema in self.schemas:
             return self.parents
         return []

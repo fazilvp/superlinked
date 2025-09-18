@@ -18,14 +18,13 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-import instructor
+import instructor  # type: ignore[import-untyped]
 import openai as openAILib
 import structlog
 from beartype.typing import Any, Generator
-from instructor.exceptions import InstructorRetryException
 from pydantic import BaseModel
 
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.settings import settings
 
 logger = structlog.getLogger()
 
@@ -91,7 +90,7 @@ class OpenAIClient:
         self._openai_model = config.model
 
     async def query(self, prompt: str, instructor_prompt: str, response_model: type[BaseModel]) -> dict[str, Any]:
-        max_retries = Settings().SUPERLINKED_NLQ_MAX_RETRIES
+        max_retries = settings.SUPERLINKED_NLQ_MAX_RETRIES
         with suppress_tokenizer_warnings():
             try:
                 response = await self._client.chat.completions.create(
@@ -104,7 +103,7 @@ class OpenAIClient:
                     ],
                     temperature=TEMPERATURE_VALUE,
                 )
-            except InstructorRetryException as e:
+            except instructor.InstructorRetryException as e:  # pylint: disable=no-member
                 logger.warning(
                     f"LLM validation followup failed after {max_retries} retries."
                     " Try increasing SUPERLINKED_NLQ_MAX_RETRIES."

@@ -15,16 +15,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import reduce
 
 import structlog
 from beartype.typing import Sequence, Type, cast
 
 from superlinked.framework.common.const import constants
-from superlinked.framework.common.exception import (
-    InvalidSchemaException,
-    QueryException,
-)
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.interface.comparison_operand import (
     ComparisonOperation,
     _Or,
@@ -39,11 +35,6 @@ from superlinked.framework.common.schema.schema_object import (
 )
 from superlinked.framework.common.util.type_validator import TypeValidator
 from superlinked.framework.dsl.index.index import Index
-from superlinked.framework.dsl.query.clause_params import NLQClauseParams
-from superlinked.framework.dsl.query.nlq.nlq_handler import NLQHandler
-from superlinked.framework.dsl.query.nlq.suggestion.query_suggestion_model import (
-    QuerySuggestionsModel,
-)
 from superlinked.framework.dsl.query.param import (
     IntParamType,
     NumericParamType,
@@ -95,7 +86,7 @@ from superlinked.framework.dsl.space.space_field_set import SpaceFieldSet
 
 logger = structlog.getLogger()
 
-SchemaFieldSelector = SchemaField | str | Param
+SchemaFieldSelector = SchemaField | None | str | Param
 
 
 class QueryDescriptor:  # pylint: disable=too-many-public-methods
@@ -183,8 +174,8 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
             Self: The query object itself.
 
         Raises:
-            QueryException: If the space is already bound in the query.
-            InvalidSchemaException: If the schema is not in the similarity field's schema types.
+            InvalidInputException: If the space is already bound in the query.
+            InvalidInputException: If the schema is not in the similarity field's schema types.
         """
         field_set = (
             space_field_set.space_field_set if isinstance(space_field_set, HasSpaceFieldSet) else space_field_set
@@ -196,7 +187,7 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
 
     def __validate_schema(self, field_set: SpaceFieldSet) -> None:
         if self.schema not in field_set.space._embedding_node_by_schema:
-            raise InvalidSchemaException(f"'find' ({type(self.schema)}) is not in similarity field's schema types.")
+            raise InvalidInputException(f"'find' ({type(self.schema)}) is not in similarity field's schema types.")
 
     @TypeValidator.wrap
     def limit(self, limit: IntParamType | None) -> QueryDescriptor:
@@ -216,7 +207,7 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
     @TypeValidator.wrap
     def select(
         self,
-        fields: SchemaFieldSelector | Sequence[SchemaFieldSelector] | None = None,
+        fields: SchemaFieldSelector | Sequence[SchemaFieldSelector] = None,
         metadata: Sequence[Space] | None = None,
     ) -> QueryDescriptor:
         """
@@ -234,10 +225,11 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
             Self: The query object itself.
 
         Raises:
-            QueryException: If multiple Param objects are provided or Param is mixed with other field types.
-            TypeException: If any of the fields are of unsupported types.
-            FieldException: If any of the schema fields are not part of the schema.
-            ValueError: If any of the spaces in metadata is not a Space.
+            InvalidInputException:
+                - If multiple Param objects are provided or Param is mixed with other field types.
+                - If any of the fields are of unsupported types.
+                - If any of the schema fields are not part of the schema.
+                - If any of the spaces in metadata is not a Space.
         """
         field_list = (
             list(fields)
@@ -245,17 +237,21 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
             else [] if fields is None else [fields]
         )
         param = self.__handle_select_param(field_list)
-        clause = SelectClause.from_param(self.schema, param, [] if metadata is None else metadata)
+        clause = SelectClause.from_param(
+            self.schema, param, [] if metadata is None else metadata, self.index._fields_to_exclude
+        )
         altered_query_descriptor = self.__append_clauses([clause])
         return altered_query_descriptor
 
-    def __handle_select_param(self, fields: Sequence[SchemaField | str | Param]) -> Param | list[str]:
+    def __handle_select_param(self, fields: Sequence[SchemaFieldSelector]) -> Param | list[str]:
         if len(fields) == 0:
             return []
         if len(fields) == 1 and isinstance(fields[0], Param):
             return fields[0]
         if any(isinstance(item, Param) for item in fields):
-            raise QueryException("Query select clause can only contain either a single Param or non-Param fields.")
+            raise InvalidInputException(
+                "Query select clause can only contain either a single Param or non-Param fields."
+            )
         return [field.name if isinstance(field, SchemaField) else cast(str, field) for field in fields]
 
     @TypeValidator.wrap
@@ -273,7 +269,8 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
         Raises:
             See `select`.
         """
-        return self.select(self.__schema.schema_fields, metadata)
+        all_fields = list(filter(lambda field: field not in self.index._fields_to_exclude, self.__schema.schema_fields))
+        return self.select(all_fields, metadata)
 
     @TypeValidator.wrap
     def with_natural_query(
@@ -307,7 +304,7 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
         A lower radius value means that the enforced maximum distance is lower,
         therefore closer vectors are returned only.
         A radius of 0.05 means the lowest cosine similarity of items returned to the query vector is 0.95.
-        The valid range is between 0 and 1. Otherwise it will raise ValueError.
+        The valid range is between 0 and 1. Otherwise it will raise InvalidInputException.
 
         Args:
             radius (NumericParamType | None): The maximum distance of the returned items from the query vector.
@@ -317,7 +314,7 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
             Self: The query object itself.
 
         Raises:
-            ValueError: If the radius is not between 0 and 1.
+            InvalidInputException: If the radius is not between 0 and 1.
         """
         clause = RadiusClause.from_param(radius)
         return self.__append_clauses([clause])
@@ -432,50 +429,6 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
         """
         return QueryDescriptor(self.index, self.schema, self.clauses, query_user_config=query_user_config)
 
-    @TypeValidator.wrap
-    def nlq_suggestions(self, feedback: str | None = None) -> QuerySuggestionsModel:
-        """
-        Get suggestions for improving the natural language query parameters.
-
-        This method analyzes the current query parameters and provides suggestions for improvement,
-        including parameter naming, clarity, and overall query structure improvements.
-        It requires that a natural language query has been set using with_natural_query().
-
-        Args:
-            feedback (str | None, optional): Additional feedback from the query creator to help
-                generate more targeted suggestions. For example, you might provide context about
-                specific requirements or constraints. Defaults to None.
-
-        Returns:
-            QuerySuggestionsModel: A model containing improvement suggestions and clarifying questions.
-                You can access the suggestions directly via the model's attributes or call
-                .print() for a formatted display of the suggestions.
-
-                Example usage:
-                ```python
-                suggestions = query.nlq_suggestions()
-                suggestions.print()  # Prints formatted suggestions
-                # Or access directly:
-                print(suggestions.improvement_suggestions)
-                print(suggestions.clarifying_questions)
-                ```
-
-        Raises:
-            QueryException: If with_natural_query() has not been called before this method.
-        """
-        nlq_params = reduce(
-            lambda params, clause: clause.get_altered_nql_params(params), self.clauses, NLQClauseParams()
-        )
-        if nlq_params.client_config is None or nlq_params.natural_query is None:
-            raise QueryException("with_natural_query clause must be provided before calling nlq_suggestions")
-        return NLQHandler(nlq_params.client_config).suggest_improvements(
-            self.clauses,
-            self._space_weight_param_info,
-            nlq_params.natural_query,
-            feedback,
-            nlq_params.system_prompt,
-        )
-
     def append_missing_mandatory_clauses(self) -> QueryDescriptor:
         clauses: list[QueryClause] = []
         if self.get_clause_by_type(LimitClause) is None:
@@ -483,7 +436,11 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
         if self.get_clause_by_type(RadiusClause) is None:
             clauses.append(RadiusClause.from_param(None))
         if self.get_clause_by_type(SelectClause) is None:
-            clauses.append(SelectClause.from_param(self.schema, fields=[], vector_parts=[]))
+            clauses.append(
+                SelectClause.from_param(
+                    self.schema, fields=[], vector_parts=[], fields_to_exclude=self.index._fields_to_exclude
+                )
+            )
         altered_query_descriptor = self.__append_clauses(clauses)
         return altered_query_descriptor._add_missing_space_weight_params()
 
@@ -524,7 +481,7 @@ class QueryDescriptor:  # pylint: disable=too-many-public-methods
             return None
         if len(clauses) == 1:
             return clauses[0]
-        raise QueryException(f"Query cannot have more than one {clause_type.__name__}, got {len(clauses)}.")
+        raise InvalidInputException(f"Query cannot have more than one {clause_type.__name__}, got {len(clauses)}.")
 
     def get_clauses_by_type(self, clause_type: Type[QueryClauseT]) -> list[QueryClauseT]:
         return [clause for clause in self.clauses if isinstance(clause, clause_type)]
@@ -573,7 +530,9 @@ class QueryDescriptorValidator:
     @staticmethod
     def __validate_schema(query_descriptor: QueryDescriptor) -> None:
         if not query_descriptor.index.has_schema(query_descriptor.schema):
-            raise QueryException(f"Index doesn't have the queried schema ({query_descriptor.schema._base_class_name})")
+            raise InvalidInputException(
+                f"Index doesn't have the queried schema ({query_descriptor.schema._base_class_name})"
+            )
 
     @staticmethod
     def __validate_single_or_none_clause(query_descriptor: QueryDescriptor) -> None:

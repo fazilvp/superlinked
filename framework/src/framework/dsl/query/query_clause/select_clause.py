@@ -20,6 +20,7 @@ import structlog
 from beartype.typing import Sequence, cast
 from typing_extensions import override
 
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.schema.schema_object import SchemaField
 from superlinked.framework.dsl.query.clause_params import (
@@ -40,6 +41,7 @@ logger = structlog.getLogger()
 class SelectClause(SingleValueParamQueryClause):
     schema: IdSchemaObject
     vector_parts: Sequence[Space]
+    fields_to_exclude: Sequence[SchemaField]
 
     @override
     def __post_init__(self) -> None:
@@ -77,9 +79,21 @@ class SelectClause(SingleValueParamQueryClause):
 
     def _get_selected_fields_by_names(self, field_names: Sequence[str]) -> list[SchemaField]:
         """We filter out the id field as it is always returned."""
-        id_field_name = self.schema.id.name
-        filtered_field_names = [name for name in field_names if name != id_field_name]
-        return self.schema._get_fields_by_names(filtered_field_names)
+        matched_fields = []
+        missing_field_names = []
+        for field_name in [name for name in field_names if name != self.schema.id.name]:
+            if field := self.schema._schema_fields_by_name.get(field_name):
+                matched_fields.append(field)
+            else:
+                missing_field_names.append(field_name)
+        if missing_field_names:
+            missing_field_names_text = ", ".join(missing_field_names)
+            raise InvalidInputException(
+                f"Fields {missing_field_names_text} not found in schema {self.schema._schema_name}."
+            )
+        if selected_excluded_fields := [field.name for field in matched_fields if field in self.fields_to_exclude]:
+            raise InvalidInputException(f"Fields {selected_excluded_fields} cannot be selected as they are not stored.")
+        return matched_fields
 
     def __validate_fields(self) -> None:
         field_names = self._get_value()
@@ -89,12 +103,18 @@ class SelectClause(SingleValueParamQueryClause):
         if invalid_vector_parts := [
             type(vector_part).__name__ for vector_part in self.vector_parts if not isinstance(vector_part, Space)
         ]:
-            raise ValueError(
+            raise InvalidInputException(
                 f"{type(self).__name__} can only work with {Space.__name__} vector_parts, got {invalid_vector_parts}"
             )
 
     @classmethod
     def from_param(
-        cls, schema: IdSchemaObject, fields: Param | Sequence[str], vector_parts: Sequence[Space]
+        cls,
+        schema: IdSchemaObject,
+        fields: Param | Sequence[str] | Sequence[SchemaField],
+        vector_parts: Sequence[Space],
+        fields_to_exclude: Sequence[SchemaField],
     ) -> SelectClause:
-        return SelectClause(QueryClause._to_typed_param(fields, [list[str], list[SchemaField]]), schema, vector_parts)
+        return SelectClause(
+            QueryClause._to_typed_param(fields, [list[str], list[SchemaField]]), schema, vector_parts, fields_to_exclude
+        )

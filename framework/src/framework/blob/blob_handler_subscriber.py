@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
 
 import structlog
 from beartype.typing import Sequence, cast
@@ -32,7 +31,7 @@ class BlobHandlerSubscriber(Subscriber[ParsedSchema]):
         super().__init__()
         self.__blob_handler = blob_handler
 
-    def update(self, messages: Sequence[ParsedSchema]) -> None:
+    async def update(self, messages: Sequence[ParsedSchema]) -> None:
         for message in messages:
             blob_fields = [field for field in message.fields if isinstance(field.schema_field, Blob)]
             for blob_field in blob_fields:
@@ -49,5 +48,4 @@ class BlobHandlerSubscriber(Subscriber[ParsedSchema]):
                     )
                     continue
                 metadata = self.__blob_handler.calculate_metadata(blob_info)
-
-                self.__blob_handler.upload(object_path, base64.b64decode(blob_info.data), metadata)
+                self.__blob_handler.upload(object_path, blob_info.data, metadata)

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from beartype.typing import Any, Generic, Sequence, cast
 
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.interface.weighted import Weighted
 from superlinked.framework.common.space.aggregation.aggregation import Aggregation
 from superlinked.framework.common.space.aggregation.aggregation_factory import (
@@ -62,13 +63,14 @@ from superlinked.framework.common.space.normalization.normalization_step import 
     MultiNormalizationStep,
     NormalizationStep,
 )
-from superlinked.framework.common.transform.exception import (
-    TransformationConfigurationException,
-)
 from superlinked.framework.common.transform.temp_lift_weighting_wrapper import (
     TempLiftWeightingWrapper,
 )
-from superlinked.framework.common.transform.transform import Step, Transform
+from superlinked.framework.common.transform.transform import (
+    FilterPredicate,
+    Step,
+    Transform,
+)
 
 
 @dataclass(frozen=True)
@@ -79,13 +81,6 @@ class BaseTransformations(Generic[AggregationInputT, EmbeddingInputT]):
 
 
 class TransformationFactory:
-    @staticmethod
-    def create_normalization_transformation(
-        transformation_config: TransformationConfig[AggregationInputT, EmbeddingInputT],
-    ) -> NormalizationStep:
-        normalization = NormalizationFactory.create_normalization(transformation_config.normalization_config)
-        return NormalizationStep(normalization)
-
     @staticmethod
     def create_embedding_transformation(
         transformation_config: TransformationConfig[AggregationInputT, EmbeddingInputT],
@@ -118,7 +113,6 @@ class TransformationFactory:
         base_transformations = TransformationFactory.__create_base_transformations(
             transformation_config, embedding_engine_manager
         )
-        aggregation_step = AggregationStep(base_transformations.aggregation)
         transformation: Step[Sequence[Weighted[Vector]], Vector]
         if (
             isinstance(base_transformations.embedding, InvertibleEmbedding)
@@ -129,14 +123,21 @@ class TransformationFactory:
             )
         else:
             if transformation_config.aggregation_config.aggregation_input_type is not Vector:
-                raise TransformationConfigurationException(
-                    "Cannot create non-vector aggregation step without an invertible embedding. "
-                    + f"Got {transformation_config.embedding_config}"
+                raise InvalidStateException(
+                    "Cannot create non-vector aggregation step without an invertible embedding.",
+                    embedding_config=transformation_config.embedding_config,
                 )
+            aggregation_step = AggregationStep(base_transformations.aggregation)
             transformation = cast(
                 Step[Sequence[Weighted[Vector]], Vector],
-                aggregation_step,
-            ).combine(NormalizationStep(base_transformations.normalization))
+                aggregation_step.combine_if(
+                    cast(Step[AggregationInputT, Vector], NormalizationStep(base_transformations.normalization)),
+                    predicate=FilterPredicate(
+                        base_transformations.aggregation.filter_predicate,
+                        transformation_config.embedding_config.default_vector,
+                    ),
+                ),
+            )
         return transformation
 
     @staticmethod
@@ -145,17 +146,18 @@ class TransformationFactory:
         base_transformations: BaseTransformations[AggregationInputT, EmbeddingInputT],
     ) -> Transform[Sequence[Weighted[Vector]], Vector]:
         if not isinstance(base_transformations.embedding, InvertibleEmbedding):
-            raise TransformationConfigurationException(
-                "Inverse aggregation cannot be instantitated "
-                + f"with given embedding {base_transformations.embedding}"
+            raise InvalidStateException(
+                "Inverse aggregation cannot be initialized with given embedding.",
+                embedding=base_transformations.embedding,
             )
         if (
             transformation_config.embedding_config.embedding_input_type
             is not transformation_config.aggregation_config.aggregation_input_type
         ):
-            raise TransformationConfigurationException(
-                "Cannot create aggregation step using an embedding with a different input type. "
-                + f"Got {transformation_config.embedding_config}"
+            raise InvalidStateException(
+                "Cannot create aggregation step using an embedding with a different input type.",
+                embedding_config=transformation_config.embedding_config,
+                aggregation_config=transformation_config.aggregation_config,
             )
         inverse_multi_normalization_step = MultiNormalizationStep(base_transformations.normalization, denormalize=True)
         inverse_multi_embedding_step = InverseMultiEmbeddingStep(base_transformations.embedding)
@@ -165,7 +167,15 @@ class TransformationFactory:
         normalization_step = NormalizationStep(base_transformations.normalization)
         aggregation_step = AggregationStep(base_transformations.aggregation)
         embedding_step = EmbeddingStep(base_transformations.embedding)
-        return temp_lift_weighting_wrapper.combine(aggregation_step).combine(embedding_step).combine(normalization_step)
+        return temp_lift_weighting_wrapper.combine(
+            aggregation_step.combine_if(
+                embedding_step.combine(normalization_step),
+                predicate=FilterPredicate(
+                    filter_=base_transformations.aggregation.filter_predicate,
+                    default_value=transformation_config.embedding_config.default_vector,
+                ),
+            ),
+        )
 
     @staticmethod
     def __create_base_transformations(

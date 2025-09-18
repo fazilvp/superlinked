@@ -20,7 +20,7 @@ from itertools import product
 
 from beartype.typing import Mapping, Sequence
 
-from superlinked.framework.common.exception import QueryException
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.dsl.query.query_clause.query_clause import QueryClause
 from superlinked.framework.dsl.space.space import Space
 
@@ -36,6 +36,12 @@ class SpaceWeightParamInfo:
         param_names_by_space = SpaceWeightParamInfo.__init_param_names_by_space(clauses, global_param_name_by_space)
         return SpaceWeightParamInfo(global_param_name_by_space, param_names_by_space)
 
+    def get_weight_param_names(self) -> list[str]:
+        combined_values = list(self.global_param_name_by_space.values())
+        for param_names in self.param_names_by_space.values():
+            combined_values.extend(param_names)
+        return combined_values
+
     @staticmethod
     def __init_global_param_name_by_space(clauses: Sequence[QueryClause]) -> dict[Space, str]:
         global_param_names_by_space = defaultdict[Space, list[str]](list)
@@ -48,7 +54,10 @@ class SpaceWeightParamInfo:
             space_param_names_str = "\n\t".join(
                 [f"{space}: {param_names}" for space, param_names in redundant_global_weight_declarations]
             )
-            raise QueryException(f"Global space weights were declared redundantly: {space_param_names_str}")
+            raise InvalidInputException(
+                "Multiple global space weight parameters found for the same space(s). "
+                f"Each space should have exactly one global weight parameter: {space_param_names_str}"
+            )
         return {space: param_names[0] for space, param_names in global_param_names_by_space.items()}
 
     @staticmethod

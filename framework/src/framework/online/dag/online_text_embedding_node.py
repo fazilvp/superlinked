@@ -25,15 +25,14 @@ from superlinked.framework.common.parser.parsed_schema import ParsedSchema
 from superlinked.framework.common.space.embedding.model_based.singleton_embedding_engine_manager import (
     SingletonEmbeddingEngineManager,
 )
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
 from superlinked.framework.common.transform.transform import Step
 from superlinked.framework.common.transform.transformation_factory import (
     TransformationFactory,
 )
-from superlinked.framework.common.util.async_util import AsyncUtil
 from superlinked.framework.online.dag.default_online_node import DefaultOnlineNode
 from superlinked.framework.online.dag.evaluation_result import SingleEvaluationResult
 from superlinked.framework.online.dag.online_node import OnlineNode
+from superlinked.framework.online.online_entity_cache import OnlineEntityCache
 
 
 class OnlineTextEmbeddingNode(DefaultOnlineNode[TextEmbeddingNode, Vector], HasLength):
@@ -41,9 +40,8 @@ class OnlineTextEmbeddingNode(DefaultOnlineNode[TextEmbeddingNode, Vector], HasL
         self,
         node: TextEmbeddingNode,
         parents: list[OnlineNode],
-        storage_manager: StorageManager,
     ) -> None:
-        super().__init__(node, parents, storage_manager)
+        super().__init__(node, parents)
         self._embedding_transformation = self._init_embedding_transformation()
 
     def _init_embedding_transformation(self) -> Step[Sequence[str], list[Vector]]:
@@ -61,35 +59,33 @@ class OnlineTextEmbeddingNode(DefaultOnlineNode[TextEmbeddingNode, Vector], HasL
         return self._embedding_transformation
 
     @override
-    def get_fallback_results(
+    async def get_fallback_results(
         self,
         parsed_schemas: Sequence[ParsedSchema],
+        online_entity_cache: OnlineEntityCache,
     ) -> list[Vector]:
         schemas_with_object_ids = [(parsed_schema.schema, parsed_schema.id_) for parsed_schema in parsed_schemas]
-        stored_results = self.load_stored_results(schemas_with_object_ids)
+        stored_results = await self.load_stored_results(schemas_with_object_ids, online_entity_cache)
         return [
-            Vector.init_zero_vector(self.node.length) if stored_result is None else stored_result
+            Vector.init_zero_vector(self.length) if stored_result is None else stored_result
             for stored_result in stored_results
         ]
 
     @override
-    def _evaluate_singles(
+    async def _evaluate_singles(
         self,
         parent_results: Sequence[dict[OnlineNode, SingleEvaluationResult[str]]],
         context: ExecutionContext,
     ) -> Sequence[Vector | None]:
-        none_indices = [i for i, parent_result in enumerate(parent_results) if not parent_result]
-        non_none_parent_results = [parent_result for parent_result in parent_results if parent_result]
-        input_ = list(
-            map(
-                lambda parent_result: list(parent_result.values())[0].value,
-                non_none_parent_results,
-            )
-        )
-        embedded_texts: list[Vector | None] = list(self.__embed_texts(input_, context))
-        for i in none_indices:
+        parent_result_values = [
+            list(parent_result.values())[0].value if parent_result else None for parent_result in parent_results
+        ]
+        empty_indices = [i for i, value in enumerate(parent_result_values) if not value]
+        valid_values = [value for value in parent_result_values if value]
+        embedded_texts: list[Vector | None] = list(await self.__embed_texts(valid_values, context))
+        for i in reversed(empty_indices):
             embedded_texts.insert(i, None)
         return embedded_texts
 
-    def __embed_texts(self, texts: Sequence[str], context: ExecutionContext) -> list[Vector]:
-        return AsyncUtil.run(self.embedding_transformation.transform(texts, context))
+    async def __embed_texts(self, texts: Sequence[str], context: ExecutionContext) -> list[Vector]:
+        return await self.embedding_transformation.transform(texts, context)

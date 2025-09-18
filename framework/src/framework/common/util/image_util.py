@@ -13,40 +13,49 @@
 # limitations under the License.
 
 import base64
+import binascii
 import io
-import os
 
 import PIL
 import PIL.Image
+from beartype.typing import IO
+from PIL._typing import StrOrBytesPath
 
-FALLBACK_IMAGE_FORMAT = "PNG"
-RGB = "RGB"
+from superlinked.framework.common.exception import InvalidInputException
+from superlinked.framework.common.settings import image_settings
 
-# Standard input dimensions (224x224) for vision models that optimize for both performance and accuracy
-EMBEDDING_IMAGE_SIZE = (224, 224)
+PILImage = PIL.Image.Image
+CONVERSION_MODE = "RGB"
 
 
 class ImageUtil:
     @staticmethod
-    def encode_b64(image: PIL.Image.Image) -> str:
-        return base64.b64encode(ImageUtil.encode_bytes(image)).decode("utf-8")
-
-    @staticmethod
-    def encode_bytes(image: PIL.Image.Image, image_format: str | None = None, quality: int = 100) -> bytes:
-        format_to_use = image_format or image.format or FALLBACK_IMAGE_FORMAT
+    def encode_bytes(image: PILImage, image_format: str | None = None, quality: int = 100) -> bytes:
+        format_to_use = image_format or image.format or image_settings.IMAGE_FORMAT
         with io.BytesIO() as buffer:
             image.save(buffer, format=format_to_use, quality=quality)
             encoded_bytes = buffer.getvalue()
         return encoded_bytes
 
     @staticmethod
-    def open_image(data: bytes) -> PIL.Image.Image:
-        return PIL.Image.open(io.BytesIO(base64.b64decode(data)))
+    def open(fp: StrOrBytesPath | IO[bytes]) -> PILImage:
+        with PIL.Image.open(fp) as img:
+            img.load()
+            return img
 
     @staticmethod
-    def open_local_image_file(dir_path: str, file_name: str) -> PIL.Image.Image:
-        return PIL.Image.open(os.path.join(dir_path, file_name))
+    def open_image(data: bytes | str) -> PILImage:
+        try:
+            if isinstance(data, str):
+                data = base64.b64decode(data, validate=True)
+            return ImageUtil.open(io.BytesIO(data))
+        except (OSError, FileNotFoundError, binascii.Error, ValueError) as e:
+            raise InvalidInputException(f"Failed to open image {str(data)}.") from e
 
     @staticmethod
-    def resize_for_embedding(image: PIL.Image.Image) -> PIL.Image.Image:
-        return image.convert(RGB).resize(EMBEDDING_IMAGE_SIZE)
+    def resize(image: PILImage) -> bytes:
+        if image.mode != CONVERSION_MODE:
+            image = image.convert(CONVERSION_MODE)
+        if image.width > image_settings.RESIZE_IMAGE_WIDTH or image.height > image_settings.RESIZE_IMAGE_HEIGHT:
+            image = image.resize((image_settings.RESIZE_IMAGE_WIDTH, image_settings.RESIZE_IMAGE_HEIGHT))
+        return ImageUtil.encode_bytes(image, image_settings.IMAGE_FORMAT, image_settings.IMAGE_QUALITY)

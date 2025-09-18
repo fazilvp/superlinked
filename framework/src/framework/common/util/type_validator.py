@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import UnionType
 
 from beartype import BeartypeConf, beartype
 from beartype.typing import Any, Callable, Sequence, TypeAlias, TypeVar, cast
 from beartype.vale import Is
 from beartype.vale._core._valecore import BeartypeValidator
+
+from superlinked.framework.common.exception import InvalidInputException
 
 # WrapableType
 WT = TypeVar(
@@ -43,14 +44,14 @@ class TypeValidator:
         """
         Checks if `items` is a list and, if it is, all elements of it is of the type `type_`.
         Raises:
-            TypeError: if either of the checks fails.
+            InvalidInputException: if either of the checks fails.
         """
         type_to_test = cast(type, type_.__bound__ if isinstance(type_, TypeVar) else type_)
         if not isinstance(items, list):
-            raise TypeError(f"'{items_name}' must be a `list`, got {items.__class__.__name__}")
+            raise InvalidInputException(f"'{items_name}' must be a `list`, got {items.__class__.__name__}")
         if items_of_wrong_type := [item for item in items if not isinstance(item, type_to_test)]:
-            raise TypeError(
-                f"'{items_name}' must be a(n) " + f"{type_to_test.__name__}` list, got {items_of_wrong_type}"
+            raise InvalidInputException(
+                f"'{items_name}' must be a(n) " + f"{type_to_test.__name__} list, got {items_of_wrong_type}"
             )
 
     @staticmethod
@@ -65,12 +66,12 @@ class TypeValidator:
         Checks if `item` is a dictionary and, if it is,
             all keys and values are of the types `key_type` and `value_type` respectively.
         Raises:
-            TypeError: if either of the checks fails.
+            InvalidInputException: if either of the checks fails.
         """
         if item is None and is_none_valid:
             return
         if not isinstance(item, dict):
-            raise TypeError(
+            raise InvalidInputException(
                 f"'{item_name}' must be {'`None` or ' if is_none_valid else ''}"
                 + f"a `dict`, got {item.__class__.__name__}"
             )
@@ -79,14 +80,14 @@ class TypeValidator:
                 k: v for k, v in item.items() if not isinstance(k, key_type) or not isinstance(v, value_type)
             }
         ):
-            raise TypeError(
+            raise InvalidInputException(
                 f"'{item_name}' must be {'`None` or ' if is_none_valid else ''}"
                 + f"a map from `{key_type.__name__}` to "
                 + f"`{value_type.__name__}`, got {items_of_wrong_type}"
             )
 
     @staticmethod
-    def wrap(obj: WT, conf: BeartypeConf = BeartypeConf(violation_param_type=TypeError)) -> WT:
+    def wrap(obj: WT, conf: BeartypeConf = BeartypeConf(violation_param_type=InvalidInputException)) -> WT:
         """
         Turns the class or callable into a dynamically type-checked object.
         """
@@ -101,21 +102,6 @@ class TypeValidator:
 
         def validator(item_list: Any) -> bool:
             return isinstance(item_list, list) and all(isinstance(item, type_) for item in item_list)
-
-        return Is[validator]
-
-    @staticmethod
-    def dict_validator(key_type: type[KT], value_type: type[VT] | UnionType) -> BeartypeValidator:
-        """
-        Returns a beartype-compliant validator for dictionaries, which checks if
-            the annotated object is a dictionary and, if it is,
-            all keys and values are of the types `key_type` and `value_type` respectively.
-        """
-
-        def validator(d: Any) -> bool:
-            return isinstance(d, dict) and all(
-                isinstance(key, key_type) and isinstance(value, value_type) for key, value in d.items()
-            )
 
         return Is[validator]
 

@@ -14,16 +14,15 @@
 
 from __future__ import annotations
 
-from beartype.typing import Sequence, cast
+from beartype.typing import Sequence
 from typing_extensions import override
 
 from superlinked.framework.common.dag.concatenation_node import ConcatenationNode
 from superlinked.framework.common.dag.context import ExecutionContext
 from superlinked.framework.common.data_types import Vector
-from superlinked.framework.common.exception import ValidationException
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.interface.has_length import HasLength
 from superlinked.framework.common.space.normalization.normalization import ConstantNorm
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
 from superlinked.framework.common.util.collection_util import CollectionUtil
 from superlinked.framework.online.dag.default_online_node import DefaultOnlineNode
 from superlinked.framework.online.dag.evaluation_result import SingleEvaluationResult
@@ -36,9 +35,8 @@ class OnlineConcatenationNode(DefaultOnlineNode[ConcatenationNode, Vector], HasL
         self,
         node: ConcatenationNode,
         parents: list[OnlineNode],
-        storage_manager: StorageManager,
     ) -> None:
-        super().__init__(node, parents, storage_manager, ParentValidationType.AT_LEAST_ONE_PARENT)
+        super().__init__(node, parents, ParentValidationType.AT_LEAST_ONE_PARENT)
         self._norm = ConstantNorm(self.node.create_normalization_config([1.0] * len(self.node.parents)))
 
     @property
@@ -46,7 +44,7 @@ class OnlineConcatenationNode(DefaultOnlineNode[ConcatenationNode, Vector], HasL
         return self.node.length
 
     @override
-    def _evaluate_singles(
+    async def _evaluate_singles(
         self,
         parent_results: Sequence[dict[OnlineNode, SingleEvaluationResult]],
         context: ExecutionContext,
@@ -78,9 +76,4 @@ class OnlineConcatenationNode(DefaultOnlineNode[ConcatenationNode, Vector], HasL
             for result in parent_result.values()
             if not isinstance(result.value, Vector)
         ):
-            raise ValidationException(f"{self.class_name} can only process `Vector` inputs.")
-
-    def _split_vector(self, vector: Vector, parents_without_duplicates: Sequence[OnlineNode]) -> list[Vector]:
-        lengths = [cast(HasLength, parent).length for parent in parents_without_duplicates]
-        vectors: list[Vector] = vector.split(lengths)
-        return vectors
+            raise InvalidInputException(f"{self.class_name} can only process `Vector` inputs.")

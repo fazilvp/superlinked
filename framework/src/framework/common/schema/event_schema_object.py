@@ -20,15 +20,11 @@ from types import UnionType
 from beartype.typing import Any, Generic, Sequence, TypeVar, cast
 from typing_extensions import override
 
-from superlinked.framework.common.exception import InitializationException
+from superlinked.framework.common.exception import InvalidInputException
 from superlinked.framework.common.interface.comparison_operation_type import (
     ComparisonOperationType,
 )
 from superlinked.framework.common.interface.has_multiplier import HasMultiplier
-from superlinked.framework.common.schema.exception import (
-    InvalidAttributeException,
-    InvalidSchemaTypeException,
-)
 from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.schema.schema_field_descriptor import (
     SchemaFieldDescriptor,
@@ -36,7 +32,6 @@ from superlinked.framework.common.schema.schema_field_descriptor import (
 from superlinked.framework.common.schema.schema_object import (
     ConcreteSchemaField,
     SchemaField,
-    SchemaObjectT,
 )
 
 # Referenced schema type
@@ -58,9 +53,7 @@ class SchemaReference(SchemaField[str], HasMultiplier, Generic[RST]):
         SchemaField.__init__(self, name, schema_obj, str, nullable=False)
         HasMultiplier.__init__(self)
         if not issubclass(referenced_schema, IdSchemaObject):
-            raise InvalidSchemaTypeException(
-                f"referenced_schema ({referenced_schema}) is not a subclass of IdSchemaObject"
-            )
+            raise InvalidInputException(f"referenced_schema ({referenced_schema}) is not a subclass of IdSchemaObject")
         self.__referenced_schema = referenced_schema
 
     @property
@@ -76,7 +69,7 @@ class SchemaReference(SchemaField[str], HasMultiplier, Generic[RST]):
         )
 
     @property
-    def _referenced_schema(self) -> type[IdSchemaObject]:
+    def _referenced_schema(self) -> type[RST]:
         return self.__referenced_schema
 
     def __mul__(self, other: float | int) -> MultipliedSchemaReference:
@@ -94,7 +87,7 @@ class MultipliedSchemaReference(HasMultiplier, Generic[RST]):
 
     def __validate_multiplier(self) -> None:
         if self.multiplier == 0:
-            raise InitializationException(f"{self.__class__.__name__} cannot have 0 (zero) as its multiplier.")
+            raise InvalidInputException(f"{self.__class__.__name__} cannot have 0 (zero) as its multiplier.")
 
     def __mul__(self, other: float | int) -> MultipliedSchemaReference:
         multiplier = self.multiplier * other
@@ -109,7 +102,7 @@ class CreatedAtField(SchemaField[int]):
     A class representing creation time. A unix timestamp field in a schema object.
     """
 
-    def __init__(self, schema_obj: SchemaObjectT, created_at_field_name: str) -> None:
+    def __init__(self, schema_obj: EventSchemaObject, created_at_field_name: str) -> None:
         super().__init__(created_at_field_name, schema_obj, int, nullable=False)
 
     @property
@@ -149,7 +142,7 @@ class EventSchemaObject(IdSchemaObject, ABC):
     def _init_field(self, field_descriptor: SchemaFieldDescriptor) -> SchemaField:
         if field_descriptor.type_ == SchemaReference:
             if len(field_descriptor.arg_types) != 1:
-                raise InvalidAttributeException(
+                raise InvalidInputException(
                     (
                         f"Badly annotated SchemaReference ({field_descriptor.arg_types}). ",
                         "SchemaReference should be annotated with the referred schema object type.",

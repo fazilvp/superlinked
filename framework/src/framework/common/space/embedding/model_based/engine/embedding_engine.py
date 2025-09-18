@@ -18,7 +18,7 @@ from pathlib import Path
 from beartype.typing import Generic, Sequence, TypeVar
 
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInputT,
+    ModelEmbeddingInput,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine_config import (
     EmbeddingEngineConfig,
@@ -35,9 +35,28 @@ class EmbeddingEngine(Generic[EmbeddingEngineConfigT]):
         self._config = config
 
     @abstractmethod
-    async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]: ...
+    async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]: ...
+
+    @abstractmethod
+    def is_query_prompt_supported(self) -> bool: ...
 
     @async_lazy_property
     async def length(self) -> int:
         embedding_results = await self.embed([""], is_query_context=True)
         return len(embedding_results[0])
+
+    @property
+    def key(self) -> str:
+        return self.calculate_key(self._model_name, self._model_cache_dir, self._config)
+
+    @classmethod
+    @abstractmethod
+    def _get_clean_model_name(cls, model_name: str) -> str:
+        pass
+
+    @classmethod
+    def calculate_key(cls, model_name: str, model_cache_dir: Path | None, config: EmbeddingEngineConfig) -> str:
+        clean_model_name = cls._get_clean_model_name(model_name)
+        parts = [cls.__name__, clean_model_name, config, model_cache_dir]
+        engine_key = ":".join(str(part) for part in parts if part is not None)
+        return engine_key

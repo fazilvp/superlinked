@@ -27,7 +27,10 @@ from superlinked.framework.common.dag.context import (
     NowStrategy,
 )
 from superlinked.framework.common.data_types import Vector
-from superlinked.framework.common.exception import QueryException
+from superlinked.framework.common.exception import (
+    InvalidInputException,
+    InvalidStateException,
+)
 from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
 from superlinked.framework.common.storage_manager.knn_search_params import (
     KNNSearchParams,
@@ -35,7 +38,7 @@ from superlinked.framework.common.storage_manager.knn_search_params import (
 from superlinked.framework.common.storage_manager.search_result_item import (
     SearchResultItem,
 )
-from superlinked.framework.common.util.execution_timer import time_execution
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 from superlinked.framework.dsl.executor.executor import App
 from superlinked.framework.dsl.query.clause_params import (
     KNNSearchClauseParams,
@@ -82,7 +85,6 @@ class QueryExecutor:
         self.query_vector_factory = query_vector_factory
         self._logger = logger.bind(schema=self._query_descriptor.schema._schema_name)
 
-    @time_execution
     async def query(self, **params: ParamInputType | None) -> QueryResult:
         """
         Execute a query with keyword parameters.
@@ -94,7 +96,7 @@ class QueryExecutor:
             Result: The result of the query execution that can be inspected and post-processed.
 
         Raises:
-            QueryException: If the query index is not amongst the executor's indices.
+            InvalidInputException: If the query index is not amongst the executor's indices.
         """
         self.__check_executor_has_index()
         query_descriptor: QueryDescriptor = await QueryParamValueSetter.set_values(self._query_descriptor, params)
@@ -174,9 +176,10 @@ class QueryExecutor:
         if unqueried_entity_ids := [
             object_id for object_id, vector in index_vector_by_object_id.items() if vector is None
         ]:
-            raise QueryException(
+            raise InvalidStateException(
                 "Vector parts can only be requested with queried index vector. "
-                f"Index vectors of {unqueried_entity_ids} cannot be found"
+                "Index vectors of entity ids cannot be found.",
+                entity_ids=unqueried_entity_ids,
             )
         return cast(list[Vector], list(index_vector_by_object_id.values()))
 
@@ -199,7 +202,6 @@ class QueryExecutor:
             for item, value in clause.get_param_value_by_param_name().items()
         }
 
-    @time_execution
     async def _produce_knn_search_params(self, query_descriptor: QueryDescriptor) -> KNNSearchParams:
         query_vector = await self._produce_query_vector(query_descriptor)
         partial_knn_search_params = reduce(
@@ -239,13 +241,24 @@ class QueryExecutor:
         query_descriptor: QueryDescriptor,
         should_return_index_vector: bool,
     ) -> Sequence[SearchResultItem]:
-        return await self.app.storage_manager.knn_search(
-            query_descriptor.index._node,
-            query_descriptor.schema,
-            knn_search_params,
-            query_descriptor.query_user_config,
-            should_return_index_vector,
-        )
+        with telemetry.span(
+            "storage.knn",
+            attributes={
+                "index": query_descriptor.index._node_id,
+                "schema": query_descriptor.schema._schema_name,
+                "n_clauses": len(query_descriptor.clauses),
+                "limit": knn_search_params.limit,
+                "radius": knn_search_params.radius,
+                "should_return_index_vector": should_return_index_vector,
+            },
+        ):
+            return await self.app.storage_manager.knn_search(
+                query_descriptor.index._node,
+                query_descriptor.schema,
+                knn_search_params,
+                query_descriptor.query_user_config,
+                should_return_index_vector,
+            )
 
     def _calculate_partial_scores(self, query_vector: Vector, result_vectors: Sequence[Vector]) -> list[list[float]]:
         if not result_vectors:
@@ -270,7 +283,7 @@ class QueryExecutor:
 
     def __check_executor_has_index(self) -> None:
         if self._query_descriptor.index not in self.app._indices:
-            raise QueryException(
+            raise InvalidInputException(
                 f"Query index {self._query_descriptor.index} is not amongst "
                 + f"the executor's indices {self.app._indices}"
             )

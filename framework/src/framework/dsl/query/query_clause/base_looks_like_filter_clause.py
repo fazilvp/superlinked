@@ -24,14 +24,14 @@ from typing_extensions import override
 from superlinked.framework.common.const import constants
 from superlinked.framework.common.data_types import NodeDataTypes, Vector
 from superlinked.framework.common.exception import (
-    InvalidSchemaException,
-    QueryException,
+    InvalidInputException,
+    NotFoundException,
 )
 from superlinked.framework.common.interface.evaluated import Evaluated
 from superlinked.framework.common.schema.id_field import IdField
 from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
-from superlinked.framework.common.schema.schema_object import SchemaObject
 from superlinked.framework.common.storage_manager.storage_manager import StorageManager
+from superlinked.framework.common.telemetry.telemetry_registry import telemetry
 from superlinked.framework.dsl.query.clause_params import QueryVectorClauseParams
 from superlinked.framework.dsl.query.query_clause.query_clause import (
     NLQCompatible,
@@ -107,14 +107,23 @@ class BaseLooksLikeFilterClause(NLQCompatible, SingleValueParamQueryClause, ABC)
         return cast(str, value), weight
 
     async def __get_looks_like_vector(
-        self, index_node_id: str, schema_obj: SchemaObject, object_id: str, storage_manager: StorageManager
+        self, index_node_id: str, schema_obj: IdSchemaObject, object_id: str, storage_manager: StorageManager
     ) -> Vector:
-        vector: Vector | None = await storage_manager.read_node_result(schema_obj, object_id, index_node_id, Vector)
+        with telemetry.span(
+            "storage.read.node.result",
+            attributes={
+                "schema": schema_obj._schema_name,
+                "object_id": object_id,
+                "node_id": index_node_id,
+                "data_type": Vector.__name__,
+            },
+        ):
+            vector: Vector | None = await storage_manager.read_node_result(schema_obj, object_id, index_node_id, Vector)
         if vector is None:
-            raise QueryException(f"Entity not found object_id: {object_id} node_id: {index_node_id}")
+            raise NotFoundException(f"Entity not found for object_id: {object_id} node_id: {index_node_id}")
         return vector
 
     @classmethod
     def _validate_schema_object(cls, id_: IdField) -> None:
         if not isinstance(id_.schema_obj, IdSchemaObject):
-            raise InvalidSchemaException(f"'with_vector': {type(id_.schema_obj).__name__} is not a schema.")
+            raise InvalidInputException(f"'with_vector': {type(id_.schema_obj).__name__} is not a schema.")

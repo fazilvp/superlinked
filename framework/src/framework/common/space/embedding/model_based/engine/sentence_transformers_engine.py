@@ -13,16 +13,18 @@
 # limitations under the License.
 
 
+import asyncio
 import warnings
 from pathlib import Path
 
 import structlog
-from beartype.typing import Any, Sequence
+from beartype.typing import Any, Sequence, cast
 from typing_extensions import override
 
+from superlinked.framework.common.exception import NotImplementedException
 from superlinked.framework.common.precision import Precision
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
-    ModelEmbeddingInputT,
+    ModelEmbeddingInput,
 )
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine import (
     EmbeddingEngine,
@@ -35,6 +37,7 @@ from superlinked.framework.common.space.embedding.model_based.model_downloader i
     ModelDownloader,
 )
 from superlinked.framework.common.util.gpu_embedding_util import GpuEmbeddingUtil
+from superlinked.framework.common.util.image_util import ImageUtil, PILImage
 
 with warnings.catch_warnings():
     warnings.filterwarnings(
@@ -49,6 +52,7 @@ with warnings.catch_warnings():
 
 logger = structlog.getLogger()
 
+PROMPTS_KEY = "prompts"
 QUERY_PROMPT_NAME = "query"
 
 
@@ -59,14 +63,30 @@ class SentenceTransformersEngine(EmbeddingEngine[EmbeddingEngineConfig]):
         self._model = self._initialize_model()
 
     @override
-    async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
+    async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         prompt_name = self._calculate_prompt_name(self._model, is_query_context)
-        return list(
-            self._model.encode(
-                list(inputs),  # type: ignore[arg-type] # it also accepts Image
-                prompt_name=prompt_name,
+
+        async def parse_input(input_: ModelEmbeddingInput) -> str | PILImage:
+            if isinstance(input_, bytes):
+                return await asyncio.to_thread(ImageUtil.open_image, input_)
+            return cast(str, input_)
+
+        parsed_inputs = await asyncio.gather(*[parse_input(input_) for input_ in inputs])
+
+        def sync_encode() -> list[list[float]]:
+            return list(
+                self._model.encode(
+                    list(parsed_inputs),  # type: ignore[arg-type] # it also accepts Image
+                    prompt_name=prompt_name,
+                    show_progress_bar=False,
+                )
             )
-        )
+
+        return await asyncio.to_thread(sync_encode)
+
+    @override
+    def is_query_prompt_supported(self) -> bool:
+        return QUERY_PROMPT_NAME in self._model._model_config.get(PROMPTS_KEY, {})
 
     def _initialize_model(self) -> SentenceTransformer:
         model_downloader = ModelDownloader()
@@ -102,9 +122,16 @@ class SentenceTransformersEngine(EmbeddingEngine[EmbeddingEngineConfig]):
             return {"torch_dtype": "float16"}
         if self._config.precision == Precision.FLOAT32:
             return {}
-        raise ValueError(f"Unsupported precision: {self._config.precision.value}.")
+        raise NotImplementedException("Unsupported precision.", precision=self._config.precision.value)
 
     def _calculate_prompt_name(self, model: SentenceTransformer, is_query_context: bool) -> str | None:
         return (
             QUERY_PROMPT_NAME if is_query_context and QUERY_PROMPT_NAME in model.prompts else model.default_prompt_name
         )
+
+    @classmethod
+    @override
+    def _get_clean_model_name(cls, model_name: str) -> str:
+        if "/" not in model_name:
+            return f"sentence-transformers/{model_name}"
+        return model_name

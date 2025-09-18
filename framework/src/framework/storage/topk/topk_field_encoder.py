@@ -18,8 +18,8 @@ import json
 from beartype.typing import Any, Callable
 
 from superlinked.framework.common.data_types import Vector
+from superlinked.framework.common.exception import NotImplementedException
 from superlinked.framework.common.schema.blob_information import BlobInformation
-from superlinked.framework.common.storage.exception import EncoderException
 from superlinked.framework.common.storage.field.field import Field
 from superlinked.framework.common.storage.field.field_data import FieldData
 from superlinked.framework.common.storage.field.field_data_type import FieldDataType
@@ -70,8 +70,7 @@ class TopKFieldEncoder:
         return self._encode_vector(Vector(float_list))
 
     def _decode_float_list(self, float_list: list[float]) -> list[float]:
-        vector = self._decode_vector(float_list)
-        return [float(x) for x in vector.value.tolist()]
+        return self._decode_vector(float_list).to_list()
 
     def _encode_int(self, int_: int) -> int:
         return int_
@@ -112,9 +111,9 @@ class TopKFieldEncoder:
     def encode_field(self, field: FieldData) -> TopKEncodedTypes:
         if encoder := self._encode_map.get(field.data_type):
             return encoder(field.value)
-        raise EncoderException(f"Unknown field type: {field.data_type}, cannot encode field.")
+        raise NotImplementedException("Unknown field type.", field_type=field.data_type.name)
 
     def decode_field(self, field: Field, value: str) -> FieldData:
         if decoder := self._decode_map.get(field.data_type):
             return FieldData.from_field(field, decoder(value))
-        raise EncoderException(f"Unknown field type: {field.data_type}, cannot decode field.")
+        raise NotImplementedException("Unknown field type.", field_type=field.data_type.name)

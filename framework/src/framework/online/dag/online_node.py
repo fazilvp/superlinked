@@ -14,27 +14,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, ABCMeta, abstractmethod
 
 import structlog
-from beartype.typing import Generic, Mapping, Sequence, cast
+from beartype.typing import Generic, Sequence, cast
 
 from superlinked.framework.common.dag.context import ExecutionContext
-from superlinked.framework.common.dag.exception import ParentCountException
 from superlinked.framework.common.dag.node import NT, Node, NodeDataT
-from superlinked.framework.common.exception import DagEvaluationException
+from superlinked.framework.common.exception import InvalidStateException
 from superlinked.framework.common.parser.parsed_schema import ParsedSchema
-from superlinked.framework.common.schema.schema_object import SchemaObject
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.schema.id_schema_object import IdSchemaObject
+from superlinked.framework.common.storage.entity.entity_id import EntityId
+from superlinked.framework.common.storage_manager.node_info import NodeInfo
 from superlinked.framework.common.storage_manager.node_result_data import NodeResultData
-from superlinked.framework.common.storage_manager.storage_manager import StorageManager
-from superlinked.framework.common.util.concurrent_executor import ConcurrentExecutor
 from superlinked.framework.online.dag.evaluation_result import (
     EvaluationResult,
     SingleEvaluationResult,
 )
-from superlinked.framework.online.dag.exception import ParentResultException
 from superlinked.framework.online.dag.parent_validator import ParentValidationType
+from superlinked.framework.online.online_entity_cache import OnlineEntityCache
 
 logger = structlog.get_logger()
 
@@ -44,13 +43,11 @@ class OnlineNode(ABC, Generic[NT, NodeDataT], metaclass=ABCMeta):
         self,
         node: NT,
         parents: Sequence[OnlineNode],
-        storage_manager: StorageManager,
         parent_validation_type: ParentValidationType = ParentValidationType.NO_VALIDATION,
     ) -> None:
         self.node = node
         self.children: list[OnlineNode] = []
         self.parents = parents
-        self.storage_manager = storage_manager
         self.validate_parents(parent_validation_type)
         for parent in self.parents:
             parent.children.append(self)
@@ -79,74 +76,78 @@ class OnlineNode(ABC, Generic[NT, NodeDataT], metaclass=ABCMeta):
             [self._get_single_evaluation_result(chunk) for chunk in (chunks or [])],
         )
 
-    def evaluate_next(
+    async def evaluate_next(
         self,
         parsed_schemas: Sequence[ParsedSchema],
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[EvaluationResult[NodeDataT] | None]:
         with context.dag_output_recorder.record_evaluation_exception(self.node_id):
-            results = self.evaluate_self(parsed_schemas, context)
+            results = await self.evaluate_self(parsed_schemas, context, online_entity_cache)
             if self.node.persist_node_result:
-                self.persist(results, parsed_schemas)
+                await self.persist(results, parsed_schemas, online_entity_cache)
         context.dag_output_recorder.record(self.node_id, results)
         return results
 
-    def evaluate_next_single(
+    async def evaluate_next_single(
         self,
         parsed_schema: ParsedSchema,
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> EvaluationResult[NodeDataT] | None:
-        return self.evaluate_next([parsed_schema], context)[0]
+        return (await self.evaluate_next([parsed_schema], context, online_entity_cache))[0]
 
-    def evaluate_parent(
-        self, parent: OnlineNode, parsed_schemas: Sequence[ParsedSchema], context: ExecutionContext
+    async def evaluate_parent(
+        self,
+        parent: OnlineNode,
+        parsed_schemas: Sequence[ParsedSchema],
+        context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[EvaluationResult | None]:
-        parents_results = self.evaluate_parents([parent], parsed_schemas, context)
-        return [parents_result.get(parent) for parents_result in parents_results]
+        parent_results = await parent.evaluate_next(parsed_schemas, context, online_entity_cache)
+        self._validate_parent_results(parent, parent_results)
+        return parent_results
 
-    def evaluate_parents(
-        self, parents: Sequence[OnlineNode], parsed_schemas: Sequence[ParsedSchema], context: ExecutionContext
+    async def evaluate_parents(
+        self,
+        parents: Sequence[OnlineNode],
+        parsed_schemas: Sequence[ParsedSchema],
+        context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[dict[OnlineNode, EvaluationResult]]:
-        inverse_parent_results = self._evaluate_parents_concurrently(parents, parsed_schemas, context)
-        parents_results = [
-            {parent: inverse_parent_results[parent][i] for parent in parents} for i in range(len(parsed_schemas))
-        ]
-        return [self._validate_parents_result(parents_result) for parents_result in parents_results]
-
-    def _evaluate_parents_concurrently(
-        self, parents: Sequence[OnlineNode], parsed_schemas: Sequence[ParsedSchema], context: ExecutionContext
-    ) -> dict[OnlineNode, list[EvaluationResult | None]]:
-        parent_results = ConcurrentExecutor().execute(
-            lambda parent: parent.evaluate_next(parsed_schemas, context),
-            args_list=[(parent,) for parent in parents],
-            condition=Settings().SUPERLINKED_CONCURRENT_ONLINE_DAG_EVALUATION,
+        results = await asyncio.gather(
+            *[self.evaluate_parent(parent, parsed_schemas, context, online_entity_cache) for parent in parents]
         )
-        return dict(zip(parents, parent_results))
+        return [
+            {
+                parent: result
+                for parent_i, parent in enumerate(parents)
+                if (result := results[parent_i][schema_i]) is not None
+            }
+            for schema_i in range(len(parsed_schemas))
+        ]
 
-    def _validate_parents_result(
-        self, parents_result: Mapping[OnlineNode, EvaluationResult | None]
-    ) -> dict[OnlineNode, EvaluationResult]:
-        parents_with_results = set(parents_result.keys())
-        for non_nullable_parent in self.non_nullable_parents.intersection(parents_with_results):
-            if parents_result[non_nullable_parent] is None:
-                raise ParentResultException(
-                    f"{type(self).__name__} won't accept None from parent {non_nullable_parent.node_id}."
-                )
-        return {parent: result for parent, result in parents_result.items() if result is not None}
+    def _validate_parent_results(self, parent: OnlineNode, parent_results: Sequence[EvaluationResult | None]) -> None:
+        if parent in self.non_nullable_parents and any(result is None for result in parent_results):
+            raise InvalidStateException(f"{type(self).__name__} won't accept None from parent {parent.node_id}.")
 
     @abstractmethod
-    def evaluate_self(
+    async def evaluate_self(
         self,
         parsed_schemas: Sequence[ParsedSchema],
         context: ExecutionContext,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[EvaluationResult[NodeDataT] | None]:
         pass
 
-    def persist(
+    async def persist(
         self,
         results: Sequence[EvaluationResult[NodeDataT] | None],
         parsed_schemas: Sequence[ParsedSchema],
+        online_entity_cache: OnlineEntityCache,
     ) -> None:
+        if not parsed_schemas:
+            return
         node_data_items = [
             data
             for i, result in enumerate(results)
@@ -167,47 +168,65 @@ class OnlineNode(ABC, Generic[NT, NodeDataT], metaclass=ABCMeta):
                 ],
             ]
         ]
-        self.storage_manager.write_node_results(node_data_items)
+        for node_data_item in node_data_items:
+            entity_id = EntityId(schema_id=node_data_item.schema_id, object_id=node_data_item.object_id)
+            if node_data_item.result is not None:
+                online_entity_cache.set_node_info(
+                    entity_id,
+                    node_data_item.node_id,
+                    NodeInfo(result=node_data_item.result),
+                )
+            if node_data_item.origin_id:
+                online_entity_cache.set_origin(entity_id, node_data_item.origin_id)
         logger.debug(
             "stored online node data",
             schemas=lambda: {parsed_schema.schema._schema_name for parsed_schema in parsed_schemas},
             n_results=len(node_data_items),
         )
 
-    def load_stored_results(
-        self, schemas_with_object_ids: Sequence[tuple[SchemaObject, str]]
+    async def load_stored_results(
+        self,
+        schemas_with_object_ids: Sequence[tuple[IdSchemaObject, str]],
+        online_entity_cache: OnlineEntityCache,
     ) -> list[NodeDataT | None]:
-        if not schemas_with_object_ids:
-            return []
-        distinct_keys = list(set(schemas_with_object_ids))
-        distinct_stored_results = self.storage_manager.read_node_results(
-            distinct_keys,
-            self.node_id,
-            self.node.node_data_type,
+        entity_ids = [
+            EntityId(schema_id=schema._schema_name, object_id=object_id)
+            for schema, object_id in schemas_with_object_ids
+        ]
+        batch_results = await online_entity_cache.get_node_results(
+            entity_ids=entity_ids,
+            node_id=self.node_id,
+            node_data_type=self.node.node_data_type,
         )
-        distinct_stored_result_by_key = dict(zip(distinct_keys, distinct_stored_results))
-        return [distinct_stored_result_by_key[key] for key in schemas_with_object_ids]
+        return [cast(NodeDataT | None, batch_results[entity_id]) for entity_id in entity_ids]
 
-    def load_stored_results_with_default(
-        self, schemas_with_object_ids: Sequence[tuple[SchemaObject, str]], default_value: NodeDataT
+    async def load_stored_results_with_default(
+        self,
+        schemas_with_object_ids: Sequence[tuple[IdSchemaObject, str]],
+        default_value: NodeDataT,
+        online_entity_cache: OnlineEntityCache,
     ) -> list[NodeDataT]:
         return [
-            default_value if result is None else result for result in self.load_stored_results(schemas_with_object_ids)
+            default_value if result is None else result
+            for result in await self.load_stored_results(schemas_with_object_ids, online_entity_cache)
         ]
 
-    def load_stored_results_or_raise_exception(
+    async def load_stored_results_or_raise_exception(
         self,
         parsed_schemas: Sequence[ParsedSchema],
+        online_entity_cache: OnlineEntityCache,
     ) -> list[NodeDataT]:
         schemas_with_object_ids = [(parsed_schema.schema, parsed_schema.id_) for parsed_schema in parsed_schemas]
-        stored_results = self.load_stored_results(schemas_with_object_ids)
+        stored_results = await self.load_stored_results(schemas_with_object_ids, online_entity_cache)
         if none_indices := [i for i, stored_result in enumerate(stored_results) if stored_result is None]:
             wrong_parsed_schema_params = [
                 f"{parsed_schemas[index].schema._schema_name}, {parsed_schemas[index].id_}" for index in none_indices
             ]
-            raise DagEvaluationException(
-                f"{self.node_id} doesn't have stored values for the following (schema, object_id) pairs:"
-                + f" ({wrong_parsed_schema_params})"
+            raise InvalidStateException(
+                "Node doesn't have stored values for schema, object_id pairs.",
+                node_id=self.node_id,
+                node_type=type(self).__name__,
+                schema_object_ids=wrong_parsed_schema_params,
             )
         return cast(list[NodeDataT], stored_results)
 
@@ -216,6 +235,8 @@ class OnlineNode(ABC, Generic[NT, NodeDataT], metaclass=ABCMeta):
         parent_validation_type: ParentValidationType,
     ) -> None:
         if not parent_validation_type.validator(len(self.parents)):
-            raise ParentCountException(
-                f"{type(self).__name__} must have {parent_validation_type.description}, got {len(self.parents)}"
+            raise InvalidStateException(
+                f"{type(self).__name__} must have {parent_validation_type.description}.",
+                node_id=self.node_id,
+                len_parents=len(self.parents),
             )

@@ -16,7 +16,6 @@ from dataclasses import dataclass
 
 from typing_extensions import override
 
-from superlinked.framework.common.settings import Settings
 from superlinked.framework.common.space.embedding.model_based.engine.embedding_engine_config import (
     EmbeddingEngineConfig,
 )
@@ -24,25 +23,21 @@ from superlinked.framework.common.space.embedding.model_based.engine.embedding_e
 
 @dataclass(frozen=True)
 class ModalEngineConfig(EmbeddingEngineConfig):  # pylint: disable=too-many-instance-attributes
-    modal_app_name: str = Settings().MODAL_APP_NAME
-    modal_class_name: str = Settings().MODAL_CLASS_NAME
-    modal_environment_name: str = Settings().MODAL_ENVIRONMENT_NAME
-    modal_batch_size: int = Settings().MODAL_BATCH_SIZE
-    modal_max_retries: int = Settings().MODAL_MAX_RETRIES
-    modal_retry_delay: float = Settings().MODAL_RETRY_DELAY
-    modal_image_format: str | None = Settings().MODAL_IMAGE_FORMAT
-    modal_image_quality: int = Settings().MODAL_IMAGE_QUALITY
+    token_id: str
+    token_secret: str
+    app_name: str = "App"
+    class_name: str = "Embedder"
+    environment_name: str = "main"
+    max_retries: int = 10
+    retry_delay: float = 0.2
 
     @override
     def __str__(self) -> str:
         attributes = [
-            f"modal_app_name={self.modal_app_name}",
-            f"modal_class_name={self.modal_class_name}",
-            f"modal_environment_name={self.modal_environment_name}",
-            f"modal_batch_size={self.modal_batch_size}",
-            f"modal_max_retries={self.modal_max_retries}",
-            f"modal_retry_delay={self.modal_retry_delay}",
-            f"modal_image_format={self.modal_image_format}",
-            f"modal_image_quality={self.modal_image_quality}",
+            f"app_name={self.app_name}",
+            f"class_name={self.class_name}",
+            f"environment_name={self.environment_name}",
+            f"max_retries={self.max_retries}",
+            f"retry_delay={self.retry_delay}",
         ]
         return f"{super().__str__()}, " + ", ".join(attributes)

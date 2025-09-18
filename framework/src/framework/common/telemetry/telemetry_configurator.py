@@ -12,22 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from superlinked.framework.common.settings import Settings
+from superlinked.framework.common.settings import settings
 from superlinked.framework.common.telemetry.telemetry_registry import (
     MetricType,
-    TelemetryRegistry,
+    telemetry,
 )
+from superlinked.framework.common.util.version_resolver import VersionResolver
 
 
 class SuperlinkedTelemetryConfigurator:
     @staticmethod
     def configure_default_metrics() -> None:
-        settings = Settings()
-        telemetry = TelemetryRegistry()
 
-        labels = {
-            "app_id": settings.APP_ID,
-        }
-        telemetry.add_labels(labels)
+        telemetry.add_labels(
+            {
+                "app_id": settings.APP_ID,
+                "superlinked_version": VersionResolver.get_version_for_package("superlinked") or "unknown",
+            }
+        )
 
-        telemetry.create_metric(MetricType.COUNTER, "embeddings_total", "Total number of embeddings calculated", "1")
+        telemetry.create_metric(MetricType.COUNTER, "engine.embed.count", "Total number of embeddings calculated", "1")
+        telemetry.create_metric(
+            MetricType.COUNTER, "vdb.write.count", "Total number of embeddings written to the vector database", "1"
+        )
+        telemetry.create_metric(
+            MetricType.COUNTER, "vdb.read.count", "Total number of embeddings read from the vector database", "1"
+        )
+        telemetry.create_metric(
+            MetricType.COUNTER, "vdb.knn.count", "Total number of KNN queries executed on the vector database", "1"
+        )
