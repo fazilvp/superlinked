@@ -40,6 +40,13 @@ except ImportError:
     InferenceServerException = Exception
     TRITON_AVAILABLE = False
 
+try:
+    from transformers import AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    AutoTokenizer = None
+    TRANSFORMERS_AVAILABLE = False
+
 logger = structlog.getLogger()
 
 
@@ -58,10 +65,18 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
                 "pip install tritonclient[grpc]"
             )
         
+        if config.triton_use_client_tokenizer and not TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "transformers is not available. Please install it using: "
+                "pip install transformers"
+            )
+        
         super().__init__(model_name, model_cache_dir, config)
         self._client = None
         self._model_config = None
+        self._tokenizer = None
         self._initialize_client()
+        self._initialize_tokenizer()
 
     def _initialize_client(self) -> None:
         """Initialize the Triton gRPC client and validate model availability."""
@@ -104,6 +119,27 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             )
             raise
 
+    def _initialize_tokenizer(self) -> None:
+        """Initialize the tokenizer if client-side tokenization is enabled."""
+        if not self._config.triton_use_client_tokenizer:
+            return
+        
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                self._config.triton_tokenizer_path
+            )
+            logger.info(
+                "Tokenizer initialized successfully",
+                tokenizer_path=self._config.triton_tokenizer_path
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to initialize tokenizer",
+                error=str(e),
+                tokenizer_path=self._config.triton_tokenizer_path
+            )
+            raise
+
     @override
     async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
         """
@@ -133,9 +169,14 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         
         # Process batches concurrently
         loop = asyncio.get_event_loop()
-        batch_results = await asyncio.gather(
-            *[loop.run_in_executor(None, self._sync_embed, batch) for batch in batches]
-        )
+        if self._config.triton_use_client_tokenizer:
+            batch_results = await asyncio.gather(
+                *[loop.run_in_executor(None, self._sync_embed_with_tokenizer, batch) for batch in batches]
+            )
+        else:
+            batch_results = await asyncio.gather(
+                *[loop.run_in_executor(None, self._sync_embed, batch) for batch in batches]
+            )
         
         # Flatten results from all batches
         all_embeddings = []
@@ -162,7 +203,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
 
     def _sync_embed(self, text_inputs: list[str]) -> np.ndarray:
         """
-        Synchronous embedding generation using Triton client.
+        Synchronous embedding generation using Triton client (legacy mode for Python backend).
         
         Args:
             text_inputs: List of text strings to embed
@@ -225,6 +266,88 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         except Exception as e:
             logger.error(
                 "Error during Triton embedding generation",
+                error=str(e),
+                input_count=len(text_inputs)
+            )
+            raise
+
+    def _sync_embed_with_tokenizer(self, text_inputs: list[str]) -> np.ndarray:
+        """
+        Synchronous embedding generation with client-side tokenization for ONNX models.
+        
+        Args:
+            text_inputs: List of text strings to embed
+            
+        Returns:
+            numpy array of embeddings
+        """
+        try:
+            # Apply query format for embedding models
+            formatted_texts = []
+            for text in text_inputs:
+                formatted_text = self._config.triton_instruction_template.format(text=text)
+                formatted_texts.append(formatted_text)
+            
+            # Tokenize inputs
+            tokenized = self._tokenizer(
+                formatted_texts,
+                padding=True,
+                truncation=True,
+                max_length=self._config.triton_tokenizer_max_length,
+                return_tensors="np"
+            )
+            
+            # Prepare inputs for Triton
+            inputs = [
+                grpcclient.InferInput("input_ids", tokenized["input_ids"].shape, "INT64"),
+                grpcclient.InferInput("attention_mask", tokenized["attention_mask"].shape, "INT64")
+            ]
+            inputs[0].set_data_from_numpy(tokenized["input_ids"].astype(np.int64))
+            inputs[1].set_data_from_numpy(tokenized["attention_mask"].astype(np.int64))
+            
+            # Create output object
+            outputs = [
+                grpcclient.InferRequestedOutput("sentence_embedding_quantized")
+            ]
+            
+            # Perform inference with retries
+            for attempt in range(self._config.triton_max_retries + 1):
+                try:
+                    response = self._client.infer(
+                        model_name=self._config.triton_model_name,
+                        model_version=self._config.triton_model_version,
+                        inputs=inputs,
+                        outputs=outputs,
+                        timeout=int(self._config.triton_timeout_seconds)
+                    )
+                    
+                    # Extract embeddings from response and convert from UINT8 to float32
+                    embeddings_uint8 = response.as_numpy("sentence_embedding_quantized")
+                    embeddings = embeddings_uint8.astype(np.float32) / 255.0
+                    return embeddings
+                    
+                except InferenceServerException as e:
+                    if attempt == self._config.triton_max_retries:
+                        logger.error(
+                            "Triton inference with tokenizer failed after all retries",
+                            error=str(e),
+                            attempts=attempt + 1,
+                            max_retries=self._config.triton_max_retries
+                        )
+                        raise
+                    
+                    logger.warning(
+                        "Triton inference with tokenizer attempt failed, retrying",
+                        error=str(e),
+                        attempt=attempt + 1,
+                        max_retries=self._config.triton_max_retries
+                    )
+                    # Short delay before retry
+                    time.sleep(0.1 * (attempt + 1))
+                    
+        except Exception as e:
+            logger.error(
+                "Error during Triton embedding generation with tokenizer",
                 error=str(e),
                 input_count=len(text_inputs)
             )
