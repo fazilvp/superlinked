@@ -305,6 +305,19 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             inputs[0].set_data_from_numpy(tokenized["input_ids"].astype(np.int64))
             inputs[1].set_data_from_numpy(tokenized["attention_mask"].astype(np.int64))
             
+            # Add position_ids if required by the model (e.g., for ONNX models)
+            if self._config.triton_add_position_ids:
+                batch_size = tokenized["input_ids"].shape[0]
+                seq_length = tokenized["input_ids"].shape[1]
+                position_ids = np.tile(
+                    np.arange(seq_length).reshape(1, -1),
+                    (batch_size, 1)
+                )
+                
+                position_ids_input = grpcclient.InferInput("position_ids", position_ids.shape, "INT64")
+                position_ids_input.set_data_from_numpy(position_ids.astype(np.int64))
+                inputs.append(position_ids_input)
+            
             # Create output object
             outputs = [
                 grpcclient.InferRequestedOutput(self._config.triton_output_name)

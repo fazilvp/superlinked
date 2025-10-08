@@ -41,6 +41,7 @@ class TritonEngineConfig(EmbeddingEngineConfig):
                                    Defaults to "Instruct: Given a hotel search query\nQuery: {text}".
         output_name (str): Name of the model output tensor (defaults to "sentence_embedding_quantized").
         output_data_type (str): Data type of the output tensor - "UINT8" or "FP32" (defaults to "UINT8").
+        add_position_ids (bool): Whether to add position_ids input for ONNX models that require it (defaults to False).
         precision (Precision, optional): The desired precision for embeddings. 
                                         Defaults to Precision.FLOAT16.
     """
@@ -57,6 +58,7 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     instruction_template: str | None = None
     output_name: str | None = None
     output_data_type: str | None = None
+    add_position_ids: bool | None = None
     
     def __post_init__(self) -> None:
         # Validate configuration values
@@ -136,6 +138,11 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     def triton_output_data_type(self) -> str:
         """Get the output data type."""
         return self.output_data_type or "FP32"
+
+    @property
+    def triton_add_position_ids(self) -> bool:
+        """Get whether to add position_ids for ONNX models that require it."""
+        return self.add_position_ids or False
 
     @override
     def __str__(self) -> str:
