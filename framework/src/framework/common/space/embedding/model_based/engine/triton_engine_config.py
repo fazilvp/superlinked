@@ -39,6 +39,8 @@ class TritonEngineConfig(EmbeddingEngineConfig):
         tokenizer_max_length (int): Maximum sequence length for tokenization (defaults to 512).
         instruction_template (str): Template for formatting text with instructions. Use {text} placeholder.
                                    Defaults to "Instruct: Given a hotel search query\nQuery: {text}".
+        output_name (str): Name of the model output tensor (defaults to "sentence_embedding_quantized").
+        output_data_type (str): Data type of the output tensor - "UINT8" or "FP32" (defaults to "UINT8").
         precision (Precision, optional): The desired precision for embeddings. 
                                         Defaults to Precision.FLOAT16.
     """
@@ -53,6 +55,8 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     tokenizer_path: str | None = None
     tokenizer_max_length: int | None = None
     instruction_template: str | None = None
+    output_name: str | None = None
+    output_data_type: str | None = None
     
     def __post_init__(self) -> None:
         # Validate configuration values
@@ -70,6 +74,8 @@ class TritonEngineConfig(EmbeddingEngineConfig):
             raise ValueError("tokenizer_path required when use_client_tokenizer is True")
         if self.tokenizer_max_length is not None and self.tokenizer_max_length <= 0:
             raise ValueError("tokenizer_max_length must be positive")
+        if self.output_data_type is not None and self.output_data_type not in ["UINT8", "FP32"]:
+            raise ValueError("output_data_type must be either 'UINT8' or 'FP32'")
 
     @property
     def triton_grpc_url(self) -> str:
@@ -120,6 +126,16 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     def triton_instruction_template(self) -> str:
         """Get the instruction template for text formatting."""
         return self.instruction_template or "Instruct: Given a hotel data for semantic text search\nQuery: {text}"
+
+    @property
+    def triton_output_name(self) -> str:
+        """Get the output tensor name."""
+        return self.output_name or "last_hidden_state"
+
+    @property
+    def triton_output_data_type(self) -> str:
+        """Get the output data type."""
+        return self.output_data_type or "FP32"
 
     @override
     def __str__(self) -> str:

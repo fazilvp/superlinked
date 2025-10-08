@@ -307,7 +307,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             
             # Create output object
             outputs = [
-                grpcclient.InferRequestedOutput("sentence_embedding_quantized")
+                grpcclient.InferRequestedOutput(self._config.triton_output_name)
             ]
             
             # Perform inference with retries
@@ -321,9 +321,22 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
                         timeout=int(self._config.triton_timeout_seconds)
                     )
                     
-                    # Extract embeddings from response and convert from UINT8 to float32
-                    embeddings_uint8 = response.as_numpy("sentence_embedding_quantized")
-                    embeddings = embeddings_uint8.astype(np.float32) / 255.0
+                    # Extract embeddings from response and handle different data types
+                    embeddings_raw = response.as_numpy(self._config.triton_output_name)
+                    
+                    # Handle different output data types
+                    if self._config.triton_output_data_type == "UINT8":
+                        # Convert from UINT8 to float32 (quantized format)
+                        embeddings = embeddings_raw.astype(np.float32) / 255.0
+                    elif self._config.triton_output_data_type == "FP32":
+                        # Already float32, but ensure correct format
+                        embeddings = embeddings_raw.astype(np.float32)
+                        # For models that output [batch_size, seq_len, hidden_size], take mean pooling
+                        if len(embeddings.shape) == 3:
+                            embeddings = np.mean(embeddings, axis=1)  # Mean pooling over sequence dimension
+                    else:
+                        raise ValueError(f"Unsupported output data type: {self._config.triton_output_data_type}")
+                    
                     return embeddings
                     
                 except InferenceServerException as e:
