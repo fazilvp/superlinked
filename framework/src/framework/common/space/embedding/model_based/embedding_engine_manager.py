@@ -44,6 +44,9 @@ from superlinked.framework.common.space.embedding.model_based.engine.sentence_tr
 from superlinked.framework.common.space.embedding.model_based.engine.triton_engine import (
     TritonEngine,
 )
+from superlinked.framework.common.space.embedding.model_based.engine.fastembed_engine import (
+    FastEmbedEngine,
+)
 from superlinked.framework.common.space.embedding.model_based.model_dimension_cache import (
     MODEL_DIMENSION_BY_NAME,
 )
@@ -58,6 +61,7 @@ ENGINE_BY_HANDLER: Mapping[ModelHandlerType, type[EmbeddingEngine]] = {
     TextModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
     TextModelHandler.MODAL: ModalEngine,
     TextModelHandler.TRITON: TritonEngine,
+    TextModelHandler.FASTEMBED: FastEmbedEngine,
     ModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformersEngine,
     ModelHandler.OPEN_CLIP: OpenCLIPEngine,
     ModelHandler.MODAL: ModalEngine,

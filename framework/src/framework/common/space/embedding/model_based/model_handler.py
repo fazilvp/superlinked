@@ -27,6 +27,7 @@ class TextModelHandler(Enum):
     SENTENCE_TRANSFORMERS = "sentence_transformers"
     MODAL = "modal"
     TRITON = "triton"
+    FASTEMBED = "fastembed"
 
 
 ModelHandlerType = ModelHandler | TextModelHandler

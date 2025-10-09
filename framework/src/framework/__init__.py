@@ -97,6 +97,9 @@ from superlinked.framework.common.space.embedding.model_based.engine.modal_engin
 from superlinked.framework.common.space.embedding.model_based.engine.triton_engine_config import (
     TritonEngineConfig,
 )
+from superlinked.framework.common.space.embedding.model_based.engine.fastembed_engine_config import (
+    FastEmbedEngineConfig,
+)
 from superlinked.framework.common.storage.search_index.search_algorithm import (
     SearchAlgorithm,
 )
@@ -181,6 +184,7 @@ __all__ = [
     "EmbeddingEngineConfig",
     "ModalEngineConfig",
     "TritonEngineConfig",
+    "FastEmbedEngineConfig",
     # Text Similarity Space Config
     "TextModelHandler",
     # DB
