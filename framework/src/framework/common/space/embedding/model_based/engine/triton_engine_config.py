@@ -132,7 +132,7 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     @property
     def triton_output_name(self) -> str:
         """Get the output tensor name."""
-        return self.output_name or "last_hidden_state"
+        return self.output_name or "sentence_embedding"
 
     @property
     def triton_output_data_type(self) -> str:
