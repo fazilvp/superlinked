@@ -89,14 +89,14 @@ class DefaultOnlineNode(OnlineNode[NT, NodeDataT], ABC, Generic[NT, NodeDataT]):
         chunks_per_parsed_schema: list[list[NodeDataT]] = [[] for i in range(batch_size)]
         for batched_inputs in self.__batch_chunk_inputs_by_size(chunk_inputs_per_parsed_schema, batch_size):
             chunked_batched_parent_results: list[ParentResults] = [
-                batched_input.input_ for batched_input in batched_inputs
+                batched_input.parent_results for batched_input in batched_inputs
             ]
             batch_results = await self._evaluate_single_with_fallback(
                 parsed_schemas, context, chunked_batched_parent_results, online_entity_cache
             )
 
             for batched_input, batch_result in zip(batched_inputs, batch_results):
-                chunks_per_parsed_schema[batched_input.parsed_schema_index].append(batch_result)
+                chunks_per_parsed_schema[batched_input.index].append(batch_result)
         return chunks_per_parsed_schema
 
     def __batch_chunk_inputs_by_size(

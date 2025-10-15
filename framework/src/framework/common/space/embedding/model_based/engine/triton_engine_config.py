@@ -34,6 +34,14 @@ class TritonEngineConfig(EmbeddingEngineConfig):
         timeout_seconds (float): Request timeout in seconds (defaults to 60.0).
         max_retries (int): Maximum number of retries (defaults to 3).
         batch_size (int): Maximum batch size for processing inputs (defaults to 32).
+        use_client_tokenizer (bool): Whether to use client-side tokenization (defaults to False).
+        tokenizer_path (str): Path to tokenizer for client-side tokenization.
+        tokenizer_max_length (int): Maximum sequence length for tokenization (defaults to 512).
+        instruction_template (str): Template for formatting text with instructions. Use {text} placeholder.
+                                   Defaults to "Instruct: Given a hotel search query\nQuery: {text}".
+        output_name (str): Name of the model output tensor (defaults to "sentence_embedding_quantized").
+        output_data_type (str): Data type of the output tensor - "UINT8" or "FP32" (defaults to "UINT8").
+        add_position_ids (bool): Whether to add position_ids input for ONNX models that require it (defaults to False).
         precision (Precision, optional): The desired precision for embeddings. 
                                         Defaults to Precision.FLOAT16.
     """
@@ -44,6 +52,13 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     timeout_seconds: float | None = None
     max_retries: int | None = None
     batch_size: int | None = None
+    use_client_tokenizer: bool | None = None
+    tokenizer_path: str | None = None
+    tokenizer_max_length: int | None = None
+    instruction_template: str | None = None
+    output_name: str | None = None
+    output_data_type: str | None = None
+    add_position_ids: bool | None = None
     
     def __post_init__(self) -> None:
         # Validate configuration values
@@ -57,6 +72,12 @@ class TritonEngineConfig(EmbeddingEngineConfig):
             raise ValueError("max_retries cannot be negative")
         if self.batch_size is not None and self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if self.use_client_tokenizer and not self.tokenizer_path:
+            raise ValueError("tokenizer_path required when use_client_tokenizer is True")
+        if self.tokenizer_max_length is not None and self.tokenizer_max_length <= 0:
+            raise ValueError("tokenizer_max_length must be positive")
+        if self.output_data_type is not None and self.output_data_type not in ["UINT8", "FP32"]:
+            raise ValueError("output_data_type must be either 'UINT8' or 'FP32'")
 
     @property
     def triton_grpc_url(self) -> str:
@@ -86,7 +107,42 @@ class TritonEngineConfig(EmbeddingEngineConfig):
     @property
     def triton_batch_size(self) -> int:
         """Get the batch size."""
-        return self.batch_size or 32
+        return self.batch_size or 8
+
+    @property
+    def triton_use_client_tokenizer(self) -> bool:
+        """Get whether to use client-side tokenization."""
+        return self.use_client_tokenizer or False
+
+    @property
+    def triton_tokenizer_path(self) -> str | None:
+        """Get the tokenizer path."""
+        return self.tokenizer_path
+
+    @property
+    def triton_tokenizer_max_length(self) -> int:
+        """Get the tokenizer max length."""
+        return self.tokenizer_max_length or 1024
+
+    @property
+    def triton_instruction_template(self) -> str:
+        """Get the instruction template for text formatting."""
+        return self.instruction_template or "Instruct: Given a hotel data for semantic text search\nQuery: {text}"
+
+    @property
+    def triton_output_name(self) -> str:
+        """Get the output tensor name."""
+        return self.output_name or "sentence_embedding"
+
+    @property
+    def triton_output_data_type(self) -> str:
+        """Get the output data type."""
+        return self.output_data_type or "FP32"
+
+    @property
+    def triton_add_position_ids(self) -> bool:
+        """Get whether to add position_ids for ONNX models that require it."""
+        return self.add_position_ids or False
 
     @override
     def __str__(self) -> str:
