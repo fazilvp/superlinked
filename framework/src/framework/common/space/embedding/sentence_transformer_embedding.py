@@ -24,8 +24,24 @@ from superlinked.framework.common.space.config.embedding.text_similarity_embeddi
 )
 from superlinked.framework.common.space.embedding.embedding import Embedding
 from superlinked.framework.common.space.embedding.embedding_cache import EmbeddingCache
+from superlinked.framework.common.space.embedding.hugging_face_manager import (
+    HuggingFaceManager,
+)
+from superlinked.framework.common.space.embedding.model_based.model_handler import (
+    TextModelHandler,
+)
+from superlinked.framework.common.space.embedding.model_manager import ModelManager
+from superlinked.framework.common.space.embedding.sentence_transformer_manager import (
+    SentenceTransformerManager,
+)
 
 logger = structlog.getLogger()
+
+# Mapping of text model handlers to their manager implementations
+MANAGER_BY_TEXT_HANDLER: dict[TextModelHandler, type[ModelManager]] = {
+    TextModelHandler.SENTENCE_TRANSFORMERS: SentenceTransformerManager,
+    TextModelHandler.HUGGINGFACE_INFERENCE: HuggingFaceManager,
+}
 
 
 class SentenceTransformerEmbedding(Embedding[str, TextSimilarityEmbeddingConfig]):
@@ -34,7 +50,12 @@ class SentenceTransformerEmbedding(Embedding[str, TextSimilarityEmbeddingConfig]
         embedding_config: TextSimilarityEmbeddingConfig,
     ) -> None:
         super().__init__(embedding_config)
-        self.manager = embedding_config.text_model_handler.create_manager(
+        # Get the appropriate manager based on the text model handler
+        manager_class = MANAGER_BY_TEXT_HANDLER.get(
+            embedding_config.text_model_handler,
+            SentenceTransformerManager  # fallback to default
+        )
+        self.manager = manager_class(
             embedding_config.model_name, embedding_config.model_cache_dir
         )
         self._cache = EmbeddingCache(self._config.cache_size)

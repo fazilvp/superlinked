@@ -87,6 +87,9 @@ class Settings(YamlBasedSettings):
     QUERY_TO_RETURN_ORIGIN_ID: bool = False
     # NLQ specific params
     SUPERLINKED_NLQ_MAX_RETRIES: int = 3
+    # HuggingFace specific params
+    HUGGING_FACE_API_TOKEN: str | None = None
+    SUPERLINKED_CONCURRENT_HUGGINGFACE_EMBEDDING: bool = True
 
     model_config = SettingsConfigDict(
         yaml_file=YAML_FILENAME, yaml_config_section=FRAMEWORK_SECTION, extra="ignore", frozen=True
