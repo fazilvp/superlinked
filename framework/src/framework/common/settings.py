@@ -90,6 +90,10 @@ class Settings(YamlBasedSettings):
     # HuggingFace specific params
     HUGGING_FACE_API_TOKEN: str | None = None
     SUPERLINKED_CONCURRENT_HUGGINGFACE_EMBEDDING: bool = True
+    # Profiling and execution timer settings
+    ENABLE_PROFILING: bool = False
+    SUPERLINKED_EXECUTION_TIMER_FILE_PATH: str | None = None
+    SUPERLINKED_EXECUTION_TIMER_INTERVAL_MS: int = 5000
 
     model_config = SettingsConfigDict(
         yaml_file=YAML_FILENAME, yaml_config_section=FRAMEWORK_SECTION, extra="ignore", frozen=True
