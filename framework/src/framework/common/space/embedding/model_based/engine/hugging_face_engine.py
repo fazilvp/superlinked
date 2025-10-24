@@ -54,8 +54,9 @@ class HuggingFaceEngine(EmbeddingEngine[EmbeddingEngineConfig]):
             # Calculate and log latency
             duration_ms = round((time.perf_counter() - start_time) * 1000)
             
+            # Format message to match DelayedEvaluator pattern and include timing in the message
             logger.info(
-                f"Processed {self._model_name} embed",
+                f"Processed {self._model_name} embed (n_items={n_items}, duration_ms={duration_ms}, wait_ms=0)",
                 n_items=n_items,
                 duration_ms=duration_ms,
                 wait_ms=0,  # No batching delay for HuggingFace
@@ -69,7 +70,7 @@ class HuggingFaceEngine(EmbeddingEngine[EmbeddingEngineConfig]):
             # Log error with timing info
             duration_ms = round((time.perf_counter() - start_time) * 1000)
             logger.error(
-                f"Failed to process {self._model_name} embed",
+                f"Failed to process {self._model_name} embed (n_items={n_items}, duration_ms={duration_ms}, error={str(e)})",
                 n_items=n_items,
                 duration_ms=duration_ms,
                 error=str(e),
