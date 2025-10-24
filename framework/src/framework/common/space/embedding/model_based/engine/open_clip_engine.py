@@ -42,6 +42,7 @@ from superlinked.framework.common.space.embedding.model_based.model_downloader i
     ModelDownloader,
 )
 from superlinked.framework.common.util.collection_util import CollectionUtil
+from superlinked.framework.common.util.execution_timer import time_execution
 from superlinked.framework.common.util.gpu_embedding_util import GpuEmbeddingUtil
 from superlinked.framework.common.util.image_util import ImageUtil, PILImage
 
@@ -73,6 +74,7 @@ class OpenCLIPEngine(EmbeddingEngine[EmbeddingEngineConfig]):
         self._tokenizer = get_tokenizer(self._model_name)
 
     @override
+    @time_execution
     async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         text_inputs = [input_ for input_ in inputs if isinstance(input_, str)]
         image_inputs = await asyncio.gather(

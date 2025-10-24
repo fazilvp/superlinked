@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-import time
 import structlog
 from beartype.typing import Sequence, cast
 from huggingface_hub import InferenceClient
@@ -21,6 +20,7 @@ from huggingface_hub.inference._providers import PROVIDER_T
 from typing_extensions import override
 
 from superlinked.framework.common.settings import settings
+from superlinked.framework.common.util.execution_timer import time_execution
 from superlinked.framework.common.space.embedding.model_based.embedding_input import (
     ModelEmbeddingInput,
 )
@@ -40,44 +40,12 @@ logger = structlog.getLogger()
 
 class HuggingFaceEngine(EmbeddingEngine[EmbeddingEngineConfig]):
     @override
+    @time_execution
     async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         inputs_to_embed = self._validate_and_cast_inputs(inputs)
         client = self._init_inference_client(self._model_name)
-        
-        # Log embedding operation start
-        start_time = time.perf_counter()
-        n_items = len(inputs_to_embed)
-        
-        try:
-            embedding_results = [client.feature_extraction(text=input_) for input_ in inputs_to_embed]
-            
-            # Calculate and log latency
-            duration_ms = round((time.perf_counter() - start_time) * 1000)
-            
-            # Format message to match DelayedEvaluator pattern and include timing in the message
-            logger.info(
-                f"Processed {self._model_name} embed (n_items={n_items}, duration_ms={duration_ms}, wait_ms=0)",
-                n_items=n_items,
-                duration_ms=duration_ms,
-                wait_ms=0,  # No batching delay for HuggingFace
-                model_name=self._model_name,
-                is_query_context=is_query_context
-            )
-            
-            return cast(list[list[float]], [item for sublist in embedding_results for item in sublist])
-            
-        except Exception as e:
-            # Log error with timing info
-            duration_ms = round((time.perf_counter() - start_time) * 1000)
-            logger.error(
-                f"Failed to process {self._model_name} embed (n_items={n_items}, duration_ms={duration_ms}, error={str(e)})",
-                n_items=n_items,
-                duration_ms=duration_ms,
-                error=str(e),
-                model_name=self._model_name,
-                is_query_context=is_query_context
-            )
-            raise
+        embedding_results = [client.feature_extraction(text=input_) for input_ in inputs_to_embed]
+        return cast(list[list[float]], [item for sublist in embedding_results for item in sublist])
 
     def _validate_and_cast_inputs(self, inputs: Sequence[ModelEmbeddingInput]) -> Sequence[str]:
         if any(not isinstance(input_, str) for input_ in inputs):
@@ -103,11 +71,9 @@ class HuggingFaceEngine(EmbeddingEngine[EmbeddingEngineConfig]):
         return model_name
 
     @async_lazy_property
+    @time_execution
     async def length(self) -> int:
         """Calculate embedding dimension by sending a test string (not empty)."""
         # HuggingFace endpoints reject empty strings, so use a simple test string
-        logger.debug(f"Calculating embedding dimension for {self._model_name}")
         embedding_results = await self.embed(["test"], is_query_context=True)
-        dimension = len(embedding_results[0])
-        logger.info(f"Embedding dimension calculated for {self._model_name}", dimension=dimension)
-        return dimension
+        return len(embedding_results[0])

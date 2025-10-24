@@ -30,6 +30,7 @@ from superlinked.framework.common.space.embedding.model_based.engine.embedding_e
 from superlinked.framework.common.space.embedding.model_based.engine.modal_engine_config import (
     ModalEngineConfig,
 )
+from superlinked.framework.common.util.execution_timer import time_execution
 
 logger = structlog.getLogger()
 
@@ -47,6 +48,7 @@ class ModalEngine(EmbeddingEngine[ModalEngineConfig]):
         self._embed = modal_cls().embed.remote.aio
 
     @override
+    @time_execution
     async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         retry_count = 0
         current_delay = self._config.retry_delay

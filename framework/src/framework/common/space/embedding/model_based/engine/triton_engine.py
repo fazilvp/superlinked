@@ -30,6 +30,7 @@ from superlinked.framework.common.space.embedding.model_based.engine.embedding_e
 from superlinked.framework.common.space.embedding.model_based.engine.triton_engine_config import (
     TritonEngineConfig,
 )
+from superlinked.framework.common.util.execution_timer import time_execution
 
 try:
     import tritonclient.grpc as grpcclient
@@ -141,6 +142,7 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
             raise
 
     @override
+    @time_execution
     async def embed(self, inputs: Sequence[ModelEmbeddingInputT], is_query_context: bool) -> list[list[float]]:
         """
         Generate embeddings using Triton Inference Server with batch processing.
@@ -154,9 +156,6 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         """
         if not inputs:
             return []
-        
-        # Start total operation timing
-        operation_start_time = time.perf_counter()
         
         # Convert inputs to list of strings
         text_inputs = [str(input_text) for input_text in inputs]
@@ -182,12 +181,6 @@ class TritonEngine(EmbeddingEngine[TritonEngineConfig]):
         all_embeddings = []
         for batch_embeddings in batch_results:
             all_embeddings.extend(batch_embeddings.tolist())
-        
-        # Calculate operation timing
-        operation_end_time = time.perf_counter()
-        total_operation_time = operation_end_time - operation_start_time
-        
-        logger.info(f"Triton inference: {total_operation_time * 1000:.2f}ms")
         
         return all_embeddings
 
