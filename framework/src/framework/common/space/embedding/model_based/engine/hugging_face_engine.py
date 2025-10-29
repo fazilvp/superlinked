@@ -56,7 +56,7 @@ class HuggingFaceEngine(EmbeddingEngine[EmbeddingEngineConfig]):
     def _init_inference_client(self, model_name: str) -> InferenceClient:
         token = settings.HUGGING_FACE_API_TOKEN
         if model_name.startswith(HTTP_PREFIXES):
-            return InferenceClient(base_url=model_name, token=token, provider=PROVIDER)
+            return InferenceClient(base_url=model_name, token=token, provider=PROVIDER, headers={"X-Scale-Up-Timeout": "600"})
         return InferenceClient(model=model_name, token=token, provider=PROVIDER)
 
     @override
