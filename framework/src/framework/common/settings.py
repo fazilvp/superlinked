@@ -89,6 +89,7 @@ class Settings(YamlBasedSettings):
     SUPERLINKED_NLQ_MAX_RETRIES: int = 3
     # HuggingFace specific params
     HUGGING_FACE_API_TOKEN: str | None = None
+    HUGGING_FACE_BILL_TO: str | None = None
     SUPERLINKED_CONCURRENT_HUGGINGFACE_EMBEDDING: bool = True
     # Profiling and execution timer settings
     ENABLE_PROFILING: bool = False
