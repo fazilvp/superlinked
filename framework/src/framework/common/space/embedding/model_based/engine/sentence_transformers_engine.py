@@ -36,6 +36,7 @@ from superlinked.framework.common.space.embedding.model_based.model_downloader i
     SENTENCE_TRANSFORMERS_ORG_NAME,
     ModelDownloader,
 )
+from superlinked.framework.common.util.execution_timer import time_execution
 from superlinked.framework.common.util.gpu_embedding_util import GpuEmbeddingUtil
 from superlinked.framework.common.util.image_util import ImageUtil, PILImage
 
@@ -63,6 +64,7 @@ class SentenceTransformersEngine(EmbeddingEngine[EmbeddingEngineConfig]):
         self._model = self._initialize_model()
 
     @override
+    @time_execution
     async def embed(self, inputs: Sequence[ModelEmbeddingInput], is_query_context: bool) -> list[list[float]]:
         prompt_name = self._calculate_prompt_name(self._model, is_query_context)
 

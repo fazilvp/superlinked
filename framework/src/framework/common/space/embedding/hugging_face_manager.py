@@ -51,6 +51,8 @@ class HuggingFaceManager(ModelManager):
         super().__init__(model_name, model_cache_dir)
         self._embedding_length: int | None = None
         self._is_inference_endpoint = model_name.startswith(HTTP_PREFIXES)
+        self._api_key = Settings().HUGGING_FACE_API_TOKEN
+        self._bill_to = Settings().HUGGING_FACE_BILL_TO
         self._client = self._init_inference_client(model_name)
         self._max_batch_size = self._retrieve_max_batch_size()
 
@@ -115,10 +117,13 @@ class HuggingFaceManager(ModelManager):
         return endpoint_info
 
     def _init_inference_client(self, model_name: str) -> InferenceClient:
-        token = Settings().HUGGING_FACE_API_TOKEN
+        kwargs = {"api_key": self._api_key, "provider": PROVIDER}
+        if self._bill_to is not None:
+            kwargs["bill_to"] = self._bill_to
+        
         if self._is_inference_endpoint:
-            return InferenceClient(base_url=model_name, token=token, provider=PROVIDER)
-        return InferenceClient(model=model_name, token=token, provider=PROVIDER)
+            return InferenceClient(base_url=model_name, **kwargs)
+        return InferenceClient(model=model_name, **kwargs)
 
     @classmethod
     def __calculate_embedding_dim_from_sample_embedding(cls, client: InferenceClient) -> int:

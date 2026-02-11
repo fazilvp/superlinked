@@ -27,6 +27,7 @@ class TextModelHandler(Enum):
     SENTENCE_TRANSFORMERS = "sentence_transformers"
     MODAL = "modal"
     TRITON = "triton"
+    HUGGINGFACE_INFERENCE = "huggingface_inference"
 
 
 ModelHandlerType = ModelHandler | TextModelHandler
